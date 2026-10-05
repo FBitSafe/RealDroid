@@ -1,0 +1,1007 @@
+## Файлы
+
+| Файл | Действие |
+|---|---|
+| `Durability.cs`, `DamageFx.cs` | Новые |
+| `Ragdoll.cs`, `BrainPanel.cs`, `Main.cs` | Заменить целиком |
+| `RomChips.cs` | Заменить одну строку (ниже) |
+| Остальные | Не трогать |
+
+**`RomChips.cs`:** в `FirmwareRom.Tick` найдите строку
+```csharp
+            float tau = Ragdoll.Spd(tgt - body.Angle[j], body.AngVel[j], kp, kd, I, dt);
+```
+и замените её на
+```csharp
+            float tau = Ragdoll.Spd(tgt - b.Angle[j], b.Vel[j] * 10f, kp, kd, I, dt);   // энкодер, а не истина
+```
+Теперь прошивка тоже видит мир через датчики: при КЗ энкодера она сама дёргает сустав.
+
+<details>
+<summary><b><code>Durability.cs</code></b> (новый)</summary>
+
+```csharp
+using Godot;
+using System;
+using System.Collections.Generic;
+
+public enum DamageMode { Off, Frozen, Live }
+
+/// Износ упоров, проводки и трубок хладагента.
+/// Off — идеальное тело, Frozen — повреждения действуют, но не растут, Live — всё.
+public sealed class Durability
+{
+    public DamageMode Mode = DamageMode.Live;
+    public bool Accumulate => Mode == DamageMode.Live;
+    public bool Effects => Mode != DamageMode.Off;
+
+    // ── упоры ──
+    public float StopTolerance = 0.06f;   // рад перехода за упор без износа (у нового)
+    public float StopWearRate  = 3f;      // износ за рад·с сверх допуска
+    public float Brittleness   = 2f;      // во сколько раз быстрее изнашивается изношенный
+
+    // ── проводка ──
+    public float TwistFree      = 0.25f;  // оборотов скрутки без трения
+    public float InsulationRate = 0.015f; // износ изоляции за (рад пути × оборот скрутки)
+    public float HoseTurns      = 2.5f;
+    public float CableTurns     = 5f;
+    public float CrossTalk      = 0.6f;   // наводка тока привода на датчик при голой изоляции, рад
+    public float ShortThreshold = 0.6f;   // ниже — начинаются КЗ
+    public float ShortRate      = 4f;     // КЗ в секунду при полностью голых проводах
+
+    // ── хладагент ──
+    public float LeakRate    = 0.02f;     // доля запаса в секунду на одну порванную трубку
+    public float HoseCooling = 0.15f;     // охлаждение катушки с порванной трубкой
+
+    public readonly float[] StopWear, Twist, Insulation, ShortTime;
+    public readonly bool[] HoseTorn, CableCut;
+    public float Coolant = 1f;
+    public readonly int[][] Route;        // Route[j] — суставы, чьи провода проходят через j
+
+    public event Action<string> Log;
+
+    readonly Ragdoll _b;
+    readonly float[] _held, _shortAngle, _shortCurrent;
+    readonly Random _rng = new(11);
+
+    public Durability(Ragdoll b)
+    {
+        _b = b;
+        int nj = b.Def.Joints.Count, np = b.Def.Parts.Count;
+        StopWear = new float[nj]; Twist = new float[nj];
+        Insulation = new float[nj]; ShortTime = new float[nj];
+        HoseTorn = new bool[nj]; CableCut = new bool[nj];
+        _held = new float[nj]; _shortAngle = new float[nj]; _shortCurrent = new float[nj];
+        Array.Fill(Insulation, 1f);
+
+        // провода идут от ядра (таза) наружу: кабель локтя проходит через плечо и позвоночник
+        var jointOfChild = new int[np];
+        Array.Fill(jointOfChild, -1);
+        for (int j = 0; j < nj; j++) jointOfChild[b.JointChild(j)] = j;
+
+        Route = new int[nj][];
+        for (int j = 0; j < nj; j++)
+        {
+            var list = new List<int>();
+            for (int k = 0; k < nj; k++)
+                for (int q = k; q >= 0; q = jointOfChild[b.JointParent(q)])
+                    if (q == j) { list.Add(k); break; }
+            Route[j] = list.ToArray();
+        }
+    }
+
+    string N(int j) => _b.Def.Joints[j].Name;
+
+    // ───────── каждый физический такт, после чтения датчиков ─────────
+    public void Tick(float dt)
+    {
+        if (!Effects) return;
+        var b = _b;
+        int nj = Twist.Length;
+
+        for (int j = 0; j < nj; j++)
+        {
+            var jd = b.Def.Joints[j];
+            float a = b.Angle[j];
+            float excess = a < jd.Lower ? a - jd.Lower : a > jd.Upper ? a - jd.Upper : 0f;
+            Twist[j] = excess / Mathf.Tau;              // обороты сверх хода сустава, со знаком
+            if (!Accumulate) continue;
+
+            float turns = MathF.Abs(Twist[j]);
+            if (turns <= TwistFree) continue;
+
+            float rub = InsulationRate * (turns - TwistFree) * MathF.Abs(b.AngVel[j]) * dt;
+            foreach (int k in Route[j])
+            {
+                float before = Insulation[k];
+                Insulation[k] = MathF.Max(0f, before - rub);
+                if (before >= ShortThreshold && Insulation[k] < ShortThreshold)
+                    Log?.Invoke($"Повреждена изоляция: {N(k)}");
+                if (turns > HoseTurns && !HoseTorn[k])
+                { HoseTorn[k] = true; Log?.Invoke($"Порвана трубка хладагента: {N(k)}"); }
+                if (turns > CableTurns && !CableCut[k])
+                { CableCut[k] = true; Log?.Invoke($"Оборван кабель: {N(k)}"); }
+            }
+        }
+
+        if (Accumulate)
+        {
+            int torn = 0;
+            foreach (bool t in HoseTorn) if (t) torn++;
+            Coolant = MathF.Max(0f, Coolant - LeakRate * torn * dt);
+        }
+
+        // короткие замыкания
+        for (int j = 0; j < nj; j++)
+        {
+            if (CableCut[j]) { ShortTime[j] = 0f; continue; }
+            if (ShortTime[j] > 0f) { ShortTime[j] -= dt; continue; }
+            float bare = Math.Clamp((ShortThreshold - Insulation[j]) / ShortThreshold, 0f, 1f);
+            if (HoseTorn[j] && Coolant > 0f) bare = MathF.Min(1f, bare * 2f);   // хладагент на голых проводах
+            if (bare <= 0f || _rng.NextDouble() > ShortRate * bare * dt) continue;
+            ShortTime[j]     = 0.05f + 0.25f * (float)_rng.NextDouble();
+            _shortAngle[j]   = ((float)_rng.NextDouble() * 2f - 1f) * Mathf.Pi;
+            _shortCurrent[j] = ((float)_rng.NextDouble() * 2f - 1f) * 1.5f;
+        }
+    }
+
+    // ───────── датчики: истина → то, что видит мозг ─────────
+    public void Sense(Brain br)
+    {
+        var b = _b;
+        for (int j = 0; j < Twist.Length; j++)
+        {
+            float a = b.Angle[j], v = b.AngVel[j] * 0.1f;
+            if (Effects)
+            {
+                if (CableCut[j]) { a = _held[j]; v = 0f; }          // датчик мёртв, застыл
+                else
+                {
+                    float bare = 1f - Insulation[j];
+                    a += CrossTalk * bare * bare * b.Current[j];    // наводка от привода
+                    if (ShortTime[j] > 0f) { a = _shortAngle[j]; v = (float)_rng.NextDouble() * 4f - 2f; }
+                }
+            }
+            if (!CableCut[j] || !Effects) _held[j] = a;
+            br.Angle[j] = a;
+            br.Vel[j] = v;
+        }
+    }
+
+    // ───────── привод ─────────
+    public float Drive(int j, float cmd, float iAvail)
+    {
+        if (!Effects) return cmd;
+        if (CableCut[j]) return 0f;
+        if (ShortTime[j] > 0f) return Math.Clamp(_shortCurrent[j], -iAvail, iAvail);
+        return cmd;
+    }
+
+    public float Cooling(int j) => !Effects ? 1f
+        : (HoseTorn[j] ? HoseCooling : 1f) * (0.2f + 0.8f * Coolant);
+
+    // ───────── упоры ─────────
+    public bool StopBroken(int j) => Effects && StopWear[j] >= 1f;
+    public float StopFactor(int j) => !Effects ? 1f : MathF.Max(0f, 1f - StopWear[j]);
+
+    public void OnStop(int j, float over, float dt)
+    {
+        if (!Accumulate || StopWear[j] >= 1f) return;
+        float w = StopWear[j];
+        float d = MathF.Abs(over) - StopTolerance * (1f - w);   // хрупкий упор ломается от меньшего
+        if (d <= 0f) return;
+        float nw = MathF.Min(1f, w + StopWearRate * (1f + Brittleness * w) * d * dt);
+        StopWear[j] = nw;
+        if (w < 0.5f && nw >= 0.5f) Log?.Invoke($"Трещина в упоре: {N(j)}");
+        if (nw >= 1f) Log?.Invoke($"Упор сломан: {N(j)}");
+    }
+
+    // ───────── сервис ─────────
+    public void AgeStops(float amount)
+    {
+        for (int j = 0; j < StopWear.Length; j++) StopWear[j] = MathF.Min(1f, StopWear[j] + amount);
+    }
+
+    public void Repair()
+    {
+        Array.Clear(StopWear); Array.Clear(Twist); Array.Fill(Insulation, 1f);
+        Array.Clear(ShortTime); Array.Clear(HoseTorn); Array.Clear(CableCut);
+        Coolant = 1f;
+        _b.UntwistAngles();
+    }
+
+    public void CopyFrom(Durability o)   // для сна: перенести травмы в клон
+    {
+        Array.Copy(o.StopWear, StopWear, StopWear.Length);
+        Array.Copy(o.Insulation, Insulation, Insulation.Length);
+        Array.Copy(o.HoseTorn, HoseTorn, HoseTorn.Length);
+        Array.Copy(o.CableCut, CableCut, CableCut.Length);
+        Coolant = o.Coolant;
+    }
+}
+```
+</details>
+
+<details>
+<summary><b><code>DamageFx.cs</code></b> (новый): искры и капли</summary>
+
+```csharp
+using Godot;
+using System;
+using System.Collections.Generic;
+
+public partial class DamageFx : Node2D
+{
+    public Ragdoll Girl;
+
+    sealed class Drop { public Vector2 P, V; public float Life; }
+    readonly List<Drop> _drops = new();
+    readonly Random _rng = new(5);
+    static readonly Color Coolant = new(0.3f, 0.75f, 1f, 0.8f), Spark = new(1f, 0.9f, 0.4f);
+
+    public override void _Ready() { TopLevel = true; ZIndex = 40; }
+
+    public override void _Process(double delta)
+    {
+        float dt = (float)delta;
+        var d = Girl?.Dur;
+        if (d == null || Girl.Bodies == null || Girl.Broken) return;
+
+        if (d.Effects && d.Coolant > 0f)
+            for (int j = 0; j < d.HoseTorn.Length; j++)
+                if (d.HoseTorn[j] && _rng.NextDouble() < 25 * dt * d.Coolant)
+                    _drops.Add(new Drop
+                    {
+                        P = Girl.JointPos(j),
+                        V = new Vector2((float)_rng.NextDouble() * 60 - 30, -(float)_rng.NextDouble() * 40),
+                        Life = 3f,
+                    });
+
+        for (int i = _drops.Count - 1; i >= 0; i--)
+        {
+            var p = _drops[i];
+            p.Life -= dt;
+            if (p.P.Y < 0f) { p.V.Y += Ragdoll.Gravity * dt; p.P += p.V * dt; }
+            else { p.P.Y = 0f; p.V = Vector2.Zero; }             // лужица
+            if (p.Life <= 0f) _drops.RemoveAt(i);
+        }
+        QueueRedraw();
+    }
+
+    public override void _Draw()
+    {
+        var d = Girl?.Dur;
+        if (d == null || Girl.Bodies == null || Girl.Broken) return;
+
+        foreach (var p in _drops)
+            DrawCircle(p.P, p.P.Y >= 0f ? 2f : 1f, new Color(Coolant, Math.Min(1f, p.Life)));
+
+        if (!d.Effects) return;
+        for (int j = 0; j < d.ShortTime.Length; j++)
+        {
+            if (d.ShortTime[j] <= 0f) continue;
+            var c = Girl.JointPos(j);
+            for (int k = 0; k < 4; k++)
+            {
+                float a = (float)(_rng.NextDouble() * Math.Tau);
+                float r = 3f + (float)_rng.NextDouble() * 6f;
+                DrawLine(c, c + new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * r, Spark, 1f);
+            }
+        }
+    }
+}
+```
+</details>
+
+<details>
+<summary><b><code>Ragdoll.cs</code></b> (замена)</summary>
+
+```csharp
+using Godot;
+using System;
+using System.Collections.Generic;
+
+public partial class Ragdoll : Node2D
+{
+    public const float Gravity = 980f;
+    public const float RefHeight = 100f;
+    const uint GirlLayers = 0b1110;
+
+    [ExportGroup("Механика")]
+    [Export] public float StopStrength = 2f;
+
+    [ExportGroup("Катушки")]
+    [Export] public float SupplyVoltage = 1.5f;
+    [Export] public float Ambient = 25f;
+    [Export] public float HeatGain = 100f;
+    [Export] public float ThermalTau = 20f;
+    [Export] public float Alpha = 0.004f;
+    [Export] public float CritTemp = 120f;
+    [Export] public float OverheatDamage = 0.002f;
+    [Export] public float WearRate = 2e-6f;
+
+    [ExportGroup("Гироскоп (аугментация)")]
+    [Export] public bool GyroOn = true;
+    [Export] public float GyroStrength = 0.6f;
+    [Export] public float GyroZeta = 0.7f;
+
+    public RagdollDef Def;
+    public PartBody[] Bodies;
+    public Brain Brain;
+    public Durability Dur;
+    public int Pelvis, Chest, Head, FootNear, FootFar;
+    public int[] Hips, Ankles, Spine, Legs;
+    public float Mgh, TotalMass, HeadHeight0;
+
+    // датчики (истина физики; мозг видит их через Dur.Sense)
+    public float[] Angle, AngVel, JointInertia;
+    public bool[] Grounded;
+    public Vector2 Com, ComVel;
+    public bool HasSupport;
+    public float SupportMin, SupportMax;
+
+    // катушки
+    public float[] CurrentCmd, Current, Torque, Temp, Damage;
+    public float Power, Heat, Effort;
+
+    public bool Broken;
+    public int Clamps;
+
+    int[] _jp, _jc, _feet, _partJoint;
+    Vector2[] _anchorInChild, _pos;
+    float[] _mass, _inertia;
+    int _tick, _visTick;
+    float _lastGlow = -1f;
+    readonly Random _rng = new(1);
+
+    public int JointParent(int j) => _jp[j];
+    public int JointChild(int j) => _jc[j];
+    public Vector2 JointPos(int j) => Bodies[_jc[j]].ToGlobal(_anchorInChild[j]);
+    public float RatedTorque(int j) => Def.Joints[j].Strength * Mgh;
+    public float Resistance(int j) =>
+        (1f + Alpha * (Temp[j] - Ambient)) * (1f + (Dur != null && Dur.Effects ? Damage[j] : 0f));
+    public float Tilt(int part) => Mathf.Wrap(Bodies[part].GlobalRotation, -Mathf.Pi, Mathf.Pi);
+    public void CutPower() => Array.Clear(CurrentCmd);
+    public void UntwistAngles() { for (int j = 0; j < Angle.Length; j++) Angle[j] = Mathf.Wrap(Angle[j], -Mathf.Pi, Mathf.Pi); }
+
+    public static float Spd(float err, float w, float kp, float kd, float I, float dt)
+        => (kp * err - (kp * dt + kd) * w) / (1f + (kp * dt * dt + kd * dt) / I);
+
+    public void Build(RagdollDef def, int girlIndex)
+    {
+        Def = def;
+        int np = def.Parts.Count, nj = def.Joints.Count;
+        Bodies = new PartBody[np];
+        _mass = new float[np]; _inertia = new float[np]; _pos = new Vector2[np];
+        Grounded = new bool[np];
+
+        uint layer = 1u << (1 + girlIndex);
+        uint mask = 1u | (GirlLayers & ~layer);
+
+        var feet = new List<int>();
+        for (int i = 0; i < np; i++)
+        {
+            var p = def.Parts[i];
+            var b = new PartBody
+            {
+                Name = p.Name, Position = p.Center,
+                CollisionLayer = layer, CollisionMask = mask, CanSleep = false,
+                PhysicsMaterialOverride = new PhysicsMaterial { Friction = p.IsFoot ? 1.2f : 0.5f, Bounce = 0f },
+            };
+            b.Setup(p);
+            if (p.IsFoot) { b.ContactMonitor = true; b.MaxContactsReported = 4; feet.Add(i); }
+            AddChild(b);
+            Bodies[i] = b; _mass[i] = p.Mass; _inertia[i] = b.Inertia; TotalMass += p.Mass;
+        }
+        _feet = feet.ToArray();
+
+        Pelvis = def.PartIndex("pelvis"); Chest = def.PartIndex("chest"); Head = def.PartIndex("head");
+        FootNear = def.PartIndex("foot_n"); FootFar = def.PartIndex("foot_f");
+        if (Pelvis < 0 || Chest < 0 || Head < 0 || FootNear < 0 || FootFar < 0)
+        {
+            GD.PushError("RagdollDef устарел: нужны pelvis, chest, head, foot_n, foot_f");
+            Broken = true;
+            return;
+        }
+        Mgh = TotalMass * Gravity * RefHeight;
+        HeadHeight0 = -def.Parts[Head].Center.Y;
+
+        _jp = new int[nj]; _jc = new int[nj]; _anchorInChild = new Vector2[nj];
+        _partJoint = new int[np];
+        Array.Fill(_partJoint, -1);
+        var hips = new List<int>(); var ankles = new List<int>();
+        var spine = new List<int>(); var legs = new List<int>();
+        for (int j = 0; j < nj; j++)
+        {
+            var jd = def.Joints[j];
+            _jp[j] = def.PartIndex(jd.Parent);
+            _jc[j] = def.PartIndex(jd.Child);
+            _partJoint[_jc[j]] = j;
+            _anchorInChild[j] = jd.Anchor - def.Parts[_jc[j]].Center;
+            string n = jd.Name;
+            if (n.StartsWith("hip")) hips.Add(j);
+            if (n.StartsWith("ankle")) ankles.Add(j);
+            if (n == "lumbar" || n == "thoracic") spine.Add(j);
+            if (n.StartsWith("hip") || n.StartsWith("knee") || n.StartsWith("ankle")) legs.Add(j);
+
+            var pin = new PinJoint2D { Name = jd.Name, Position = jd.Anchor, Softness = 0f };
+            AddChild(pin);
+            pin.NodeA = pin.GetPathTo(Bodies[_jp[j]]);
+            pin.NodeB = pin.GetPathTo(Bodies[_jc[j]]);
+        }
+        Hips = hips.ToArray(); Ankles = ankles.ToArray(); Spine = spine.ToArray(); Legs = legs.ToArray();
+
+        Angle = new float[nj]; AngVel = new float[nj]; JointInertia = new float[nj];
+        CurrentCmd = new float[nj]; Current = new float[nj]; Torque = new float[nj];
+        Temp = new float[nj]; Damage = new float[nj];
+        Array.Fill(Temp, Ambient);
+
+        Dur = new Durability(this);
+        Brain = new Brain(this, nj, Engine.PhysicsTicksPerSecond);
+        AddChild(new DebugOverlay { Girl = this });
+        AddChild(new DamageFx { Girl = this });
+    }
+
+    public override void _PhysicsProcess(double delta)
+    {
+        if (Bodies == null || Broken || Brain == null) return;
+        if (!StateIsFinite()) return;
+        float dt = (float)delta;
+        ReadSensors();
+        Dur.Tick(dt);
+        Dur.Sense(Brain);
+        Brain.Tick(_tick++, dt);
+        DriveCoils(dt);
+        ApplyStops(dt);
+        ApplyGyro(dt);
+        UpdateVisuals();
+    }
+
+    bool StateIsFinite()
+    {
+        foreach (var b in Bodies)
+        {
+            if (b.GlobalPosition.IsFinite() && b.LinearVelocity.IsFinite()
+                && float.IsFinite(b.GlobalRotation) && float.IsFinite(b.AngularVelocity)) continue;
+
+            Broken = true;
+            var idx = new int[_jp.Length];
+            for (int j = 0; j < idx.Length; j++) idx[j] = j;
+            Array.Sort(idx, (x, y) => Math.Abs(AngVel[y]).CompareTo(Math.Abs(AngVel[x])));
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"Ragdoll взорвался: первое битое тело '{b.Name}'. Последний целый такт:\n");
+            for (int k = 0; k < Math.Min(3, idx.Length); k++)
+            {
+                int j = idx[k];
+                var jd = Def.Joints[j];
+                sb.Append($"  {jd.Name,-12} угол {Angle[j],6:F2} (предел {jd.Lower:F1}..{jd.Upper:F1})  " +
+                          $"ω {AngVel[j],7:F1}  ток {Current[j],5:F2}  T {Temp[j]:F0}°C  " +
+                          $"упор {1f - Dur.StopWear[j]:P0}\n");
+            }
+            var slots = string.Join(" ", Array.ConvertAll(Brain.Slots, s => s.Chip == null ? "—" : "+"));
+            sb.Append($"  слоты [{slots}]  износ {Dur.Mode}");
+            GD.PushError(sb.ToString());
+            return false;
+        }
+        return true;
+    }
+
+    public void ClampVelocities(float maxAng, float maxLin)
+    {
+        foreach (var b in Bodies)
+        {
+            if (Math.Abs(b.AngularVelocity) > maxAng)
+            { b.AngularVelocity = Math.Sign(b.AngularVelocity) * maxAng; Clamps++; }
+            if (b.LinearVelocity.LengthSquared() > maxLin * maxLin)
+            { b.LinearVelocity = b.LinearVelocity.LimitLength(maxLin); Clamps++; }
+        }
+    }
+
+    float IAbout(int p, Vector2 pivot) => _inertia[p] + _mass[p] * (_pos[p] - pivot).LengthSquared();
+
+    void ReadSensors()
+    {
+        Vector2 com = Vector2.Zero, vel = Vector2.Zero;
+        for (int p = 0; p < Bodies.Length; p++)
+        {
+            _pos[p] = Bodies[p].GlobalPosition;
+            com += _pos[p] * _mass[p];
+            vel += Bodies[p].LinearVelocity * _mass[p];
+        }
+        Com = com / TotalMass;
+        ComVel = vel / TotalMass;
+
+        HasSupport = false;
+        float lo = float.MaxValue, hi = float.MinValue;
+        foreach (int f in _feet)
+        {
+            Grounded[f] = Bodies[f].GetContactCount() > 0;
+            if (!Grounded[f]) continue;
+            var d = Def.Parts[f];
+            float half = (d.Length * 0.5f + d.Radius) * Mathf.Abs(Mathf.Cos(Bodies[f].GlobalRotation));
+            lo = Math.Min(lo, _pos[f].X - half);
+            hi = Math.Max(hi, _pos[f].X + half);
+            HasSupport = true;
+        }
+        if (HasSupport) { SupportMin = lo; SupportMax = hi; }
+
+        for (int j = 0; j < _jp.Length; j++)
+        {
+            var a = Bodies[_jp[j]]; var c = Bodies[_jc[j]];
+            float raw = c.GlobalRotation - a.GlobalRotation;
+            Angle[j] += Mathf.Wrap(raw - Angle[j], -Mathf.Pi, Mathf.Pi);   // непрерывный угол
+            AngVel[j] = c.AngularVelocity - a.AngularVelocity;
+
+            Vector2 pivot = c.ToGlobal(_anchorInChild[j]);
+            float Ia = IAbout(_jp[j], pivot), Ic = IAbout(_jc[j], pivot);
+            JointInertia[j] = Ia * Ic / (Ia + Ic);
+        }
+    }
+
+    void DriveCoils(float dt)
+    {
+        float power = 0f, heat = 0f, effort = 0f;
+        for (int j = 0; j < _jp.Length; j++)
+        {
+            float r = Resistance(j);
+            float iAvail = SupplyVoltage / r;
+            float i = Math.Clamp(Dur.Drive(j, CurrentCmd[j], iAvail), -iAvail, iAvail);
+            float tau = i * RatedTorque(j);
+            Current[j] = i;
+            Torque[j] = tau;
+
+            float q = i * i * r;
+            Temp[j] += dt * (HeatGain * q - Dur.Cooling(j) * (Temp[j] - Ambient)) / ThermalTau;
+            if (Dur.Accumulate)
+            {
+                if (Temp[j] > CritTemp) Damage[j] += OverheatDamage * (Temp[j] - CritTemp) * dt;
+                Damage[j] += WearRate * Math.Abs(i * AngVel[j]) * dt;
+            }
+
+            power += Math.Abs(tau * AngVel[j]);
+            heat += q;
+            effort += i * i;
+
+            if (tau == 0f || !float.IsFinite(tau)) continue;
+            Bodies[_jc[j]].ApplyTorque(tau);
+            Bodies[_jp[j]].ApplyTorque(-tau);
+        }
+        Power = power / Mgh;
+        Heat = heat / _jp.Length;
+        Effort = effort / _jp.Length;
+    }
+
+    // механические упоры: работают без прошивки, изнашиваются, ломаются
+    void ApplyStops(float dt)
+    {
+        for (int j = 0; j < _jp.Length; j++)
+        {
+            var jd = Def.Joints[j];
+            float over = Angle[j] < jd.Lower ? jd.Lower - Angle[j]
+                       : Angle[j] > jd.Upper ? jd.Upper - Angle[j] : 0f;
+            if (over == 0f || Dur.StopBroken(j)) continue;
+            Dur.OnStop(j, over, dt);
+
+            float f  = Dur.StopFactor(j);
+            float I  = JointInertia[j];
+            float k0 = Math.Min(StopStrength * Mgh, 0.3f * I / (dt * dt));
+            float kl = f * k0;
+            float kd = f * Math.Min(2f * Mathf.Sqrt(k0 * I), 0.6f * I / dt);
+            float tau = kl * over - kd * AngVel[j];
+            tau = over > 0f ? Math.Max(tau, 0f) : Math.Min(tau, 0f);
+            if (!float.IsFinite(tau)) continue;
+            Bodies[_jc[j]].ApplyTorque(tau);
+            Bodies[_jp[j]].ApplyTorque(-tau);
+        }
+    }
+
+    void ApplyGyro(float dt)
+    {
+        if (!GyroOn || Brain.Slots[(int)LobeKind.Firmware].Chip == null) return;
+        float s = 0f;
+        foreach (int j in Legs) s += Brain.Stiff[j];
+        s /= Math.Max(Legs.Length, 1);
+        float kg = GyroStrength * Mgh * s;
+        if (kg < 1f) return;
+
+        var t = Bodies[Chest];
+        float I = _inertia[Chest] * 2f;
+        float kd = 2f * GyroZeta * Mathf.Sqrt(kg * I);
+        float tau = Math.Clamp(Spd(-Tilt(Chest), t.AngularVelocity, kg, kd, I, dt), -kg, kg);
+        if (!float.IsFinite(tau)) return;
+        t.ApplyTorque(tau);
+        Power += Math.Abs(tau * t.AngularVelocity) / Mgh;
+    }
+
+    void UpdateVisuals()
+    {
+        var fw = Brain.Slots[(int)LobeKind.Firmware];
+        var mo = Brain.Slots[(int)LobeKind.Motor];
+        float glow = fw.Chip == null ? 0f
+                   : mo.Chip == null ? 0.15f
+                   : mo.Boot < 1f ? mo.Boot * (0.4f + 0.6f * (float)_rng.NextDouble())
+                   : 1f;
+        if (Math.Abs(glow - _lastGlow) > 0.01f)
+        {
+            Bodies[Head].EyeGlow = glow;
+            Bodies[Head].QueueRedraw();
+            _lastGlow = glow;
+        }
+
+        if (++_visTick % 12 != 0) return;
+        for (int p = 0; p < Bodies.Length; p++)
+        {
+            int j = _partJoint[p];
+            if (j < 0) continue;
+            float h = Math.Clamp((Temp[j] - Ambient) / (CritTemp - Ambient), 0f, 1f);
+            float w = Math.Clamp(Dur.Effects ? Damage[j] : 0f, 0f, 1f);
+            var b = Bodies[p];
+            if (Math.Abs(h - b.Heat) > 0.02f || Math.Abs(w - b.Wear) > 0.02f)
+            {
+                b.Heat = h; b.Wear = w;
+                b.QueueRedraw();
+            }
+        }
+    }
+}
+```
+</details>
+
+<details>
+<summary><b><code>BrainPanel.cs</code></b> (замена): колонки упора, изоляции, флаги</summary>
+
+```csharp
+using Godot;
+using System;
+
+public partial class BrainPanel : Control
+{
+    public Ragdoll Girl;
+    public LobeKind Selected = LobeKind.Motor;
+    public string Message = "";
+    public float MessageTime;
+
+    public static readonly LobeKind[] Order =
+        { LobeKind.Firmware, LobeKind.Vestibular, LobeKind.Reflex, LobeKind.Arbiter, LobeKind.Motor };
+
+    static readonly Color Dim = new(0.6f, 0.62f, 0.7f), Off = new(0.35f, 0.36f, 0.42f),
+                          Booting = new(0.95f, 0.8f, 0.25f), On = new(0.35f, 0.95f, 0.55f),
+                          Cold = new(0.35f, 0.6f, 1f), Warm = new(1f, 0.6f, 0.15f), Burn = new(1f, 0.2f, 0.15f);
+
+    public override void _Ready() { MouseFilter = MouseFilterEnum.Ignore; Position = new Vector2(10, 10); }
+
+    public override void _Process(double d)
+    {
+        if (MessageTime > 0) MessageTime -= (float)d;
+        QueueRedraw();
+    }
+
+    void Text(float x, float y, string s, Color c, int size = 12)
+        => DrawString(ThemeDB.FallbackFont, new Vector2(x, y), s, HorizontalAlignment.Left, -1, size, c);
+
+    void Bar(float x, float y, float w, float v, Color c)
+    {
+        DrawRect(new Rect2(x, y - 8, w, 7), new Color(1, 1, 1, 0.08f));
+        DrawRect(new Rect2(x, y - 8, w * Math.Clamp(v, 0f, 1f), 7), c);
+    }
+
+    static Color Health(float h) => h > 0.6f ? Dim : h > 0f ? Warm : Burn;
+
+    static string ModeName(DamageMode m) => m switch
+    {
+        DamageMode.Off => "ВЫКЛ (идеальное тело)",
+        DamageMode.Frozen => "ЗАМОРОЖЕН",
+        _ => "ВКЛ",
+    };
+
+    public override void _Draw()
+    {
+        DrawRect(new Rect2(0, 0, 430, 660), new Color(0.02f, 0.03f, 0.05f, 0.7f));
+        float y = 20;
+        Text(10, y, "МОЗГ", Colors.White, 14);
+        if (Girl == null || !IsInstanceValid(Girl) || Girl.Brain == null)
+        {
+            Text(10, y + 24, "тела нет · [R] заново", Burn);
+            return;
+        }
+        var b = Girl.Brain;
+        var d = Girl.Dur;
+
+        y += 6;
+        for (int i = 0; i < Order.Length; i++)
+        {
+            var s = b.Slots[(int)Order[i]];
+            y += 24;
+            var col = s.Chip == null ? Off : s.Boot < 1f ? Booting : On;
+            var r = new Rect2(8, y - 16, 414, 22);
+            DrawRect(r, new Color(col, 0.15f));
+            if (Order[i] == Selected) DrawRect(r, Colors.White, false, 1.5f);
+            DrawCircle(new Vector2(19, y - 5), 4f, col);
+            Text(30, y, $"{i + 1} {s.Title}", Colors.White);
+            string label = s.Chip == null ? "— пусто —"
+                         : s.Boot < 1f ? $"{s.Chip.Label} {s.Boot:P0}" : s.Chip.Label;
+            Text(165, y, label, col);
+            Text(390, y, $"{s.Hz:0}", Dim, 10);
+        }
+
+        y += 30;
+        string st = b.Slots[(int)LobeKind.Arbiter].Chip is ArbiterRom a ? a.StateName : "заклинило";
+        Text(10, y, $"Протокол: {st}", Colors.White);
+        for (int k = 0; k < 4; k++)
+        {
+            y += 16;
+            Text(18, y, Protocol.Names[k], Dim, 11);
+            Bar(100, y, 200, b.P[k], On);
+        }
+
+        y += 24;
+        var bl = b.Balance;
+        string pose = bl[Bal.Lying] > 0.5f ? "ЛЕЖИТ" : bl[Bal.Support] > 0.5f ? "на ногах" : "нет опоры";
+        Text(10, y, $"Запас ξ: {bl[Bal.Margin] * Ragdoll.RefHeight:+0;-0} px   {pose}", Colors.White);
+
+        y += 20;
+        Text(10, y, $"Износ: {ModeName(d.Mode)}", d.Mode == DamageMode.Live ? Warm : Dim);
+        Text(230, y, "хладагент", Dim, 11);
+        Bar(295, y, 120, d.Coolant, d.Coolant > 0.3f ? Cold : Burn);
+
+        y += 24;
+        Text(10, y, "Сустав", Dim, 11); Text(145, y, "°C", Dim, 11); Text(175, y, "R", Dim, 11);
+        Text(210, y, "ток", Dim, 11);   Text(262, y, "упор", Dim, 11); Text(302, y, "изол", Dim, 11);
+        for (int j = 0; j < Girl.Temp.Length; j++)
+        {
+            y += 15;
+            float T = Girl.Temp[j];
+            float t = (T - Girl.Ambient) / (Girl.CritTemp - Girl.Ambient);
+            var c = t < 1f ? Cold.Lerp(Warm, Math.Clamp(t, 0f, 1f)) : Burn;
+            float stop = 1f - d.StopWear[j], ins = d.Insulation[j];
+
+            Text(10, y, Girl.Def.Joints[j].Name, Dim, 11);
+            Bar(85, y, 55, t, c);
+            Text(145, y, $"{T:0}", c, 11);
+            Text(175, y, $"{Girl.Resistance(j):0.00}", Girl.Damage[j] > 0.05f ? Burn : Dim, 11);
+            Bar(210, y, 45, Math.Abs(Girl.Current[j]) / Girl.SupplyVoltage, Warm);
+            Text(262, y, stop <= 0f ? "СЛОМ" : $"{stop:P0}", Health(stop), 11);
+            Text(302, y, $"{ins:P0}", Health(ins - 0.4f), 11);
+
+            string flags = (d.ShortTime[j] > 0f ? "КЗ " : "") + (d.HoseTorn[j] ? "Т " : "") + (d.CableCut[j] ? "X " : "");
+            if (Math.Abs(d.Twist[j]) > 0.05f) flags += $"{d.Twist[j]:+0.0;-0.0}об";
+            if (flags.Length > 0) Text(342, y, flags, Burn, 11);
+        }
+
+        y += 22;
+        if (MessageTime > 0) Text(10, y, "» " + Message, Booting);
+        y += 20; Text(10, y, "[1-5] слот  [Space] вынуть/вставить  [Tab] другой чип", Dim, 11);
+        y += 16; Text(10, y, "[ЛКМ] тащить  [Q/E] толкнуть  [G] гироскоп  [D] схема", Dim, 11);
+        y += 16; Text(10, y, "[K] режим износа  [J] состарить упоры  [H] полный ремонт  [R] заново", Dim, 11);
+    }
+}
+```
+</details>
+
+<details>
+<summary><b><code>Main.cs</code></b> (замена): клавиши K, J, H и журнал поломок</summary>
+
+```csharp
+using Godot;
+using System;
+using System.Collections.Generic;
+
+public partial class Main : Node2D
+{
+    const float DragK = 120f, DragMaxMass = 15f;
+    static readonly float DragD = 2f * Mathf.Sqrt(DragK);
+
+    RagdollDef _def;
+    Ragdoll _girl;
+    Camera2D _cam;
+    Line2D _dragLine;
+    RigidBody2D _drag;
+    Vector2 _dragLocal;
+    BrainPanel _panel;
+    LobeKind _sel = LobeKind.Motor;
+    DamageMode _damageMode = DamageMode.Live;
+
+    readonly Dictionary<LobeKind, Func<IChip>[]> _variants = new();
+    readonly Dictionary<LobeKind, int> _variantIdx = new();
+    readonly Dictionary<LobeKind, IChip> _inHand = new();
+
+    public override void _Ready()
+    {
+        RenderingServer.SetDefaultClearColor(new Color(0.09f, 0.10f, 0.13f));
+
+        var floor = new StaticBody2D
+        {
+            CollisionLayer = 1, CollisionMask = 0,
+            PhysicsMaterialOverride = new PhysicsMaterial { Friction = 1f }
+        };
+        floor.AddChild(new CollisionShape2D { Shape = new WorldBoundaryShape2D() });
+        AddChild(floor);
+
+        _cam = new Camera2D { Zoom = new Vector2(2.5f, 2.5f), Position = new Vector2(0, -90) };
+        AddChild(_cam);
+        _cam.MakeCurrent();
+
+        _dragLine = new Line2D { Width = 1f, DefaultColor = new Color(1f, 0.8f, 0.3f), ZIndex = 20 };
+        AddChild(_dragLine);
+
+        var ui = new CanvasLayer();
+        _panel = new BrainPanel { Selected = _sel };
+        ui.AddChild(_panel);
+        AddChild(ui);
+
+        _variants[LobeKind.Firmware]   = new Func<IChip>[] { () => FirmwareRom.Stock(), () => FirmwareRom.Overclock() };
+        _variants[LobeKind.Vestibular] = new Func<IChip>[] { () => VestibularRom.Stock(), () => VestibularRom.Worn() };
+        _variants[LobeKind.Reflex]     = new Func<IChip>[] { () => ReflexRom.Stock(), () => ReflexRom.Hyper() };
+        _variants[LobeKind.Arbiter]    = new Func<IChip>[] { () => new ArbiterRom() };
+        _variants[LobeKind.Motor]      = new Func<IChip>[] { () => new MotorRom() };
+        foreach (var k in BrainPanel.Order) _variantIdx[k] = 0;
+
+        _def = RagdollDef.Girl();
+        Spawn();
+    }
+
+    void Spawn()
+    {
+        _drag = null;
+        _dragLine.ClearPoints();
+        _girl?.QueueFree();
+        _inHand.Clear();
+
+        _girl = new Ragdoll { Position = new Vector2(_cam.Position.X, -1f) };
+        AddChild(_girl);
+        _girl.Build(_def, 0);
+        _panel.Girl = _girl;
+        if (_girl.Broken) return;
+
+        _girl.Dur.Mode = _damageMode;
+        _girl.Dur.Log += Say;
+
+        foreach (var k in BrainPanel.Order)
+            _girl.Brain.Insert(_variants[k][_variantIdx[k]](), instant: true);
+    }
+
+    void Say(string m) { _panel.Message = m; _panel.MessageTime = 3f; }
+
+    void ToggleSlot()
+    {
+        var b = _girl?.Brain;
+        if (b == null) return;
+        var s = b.Slots[(int)_sel];
+        if (s.Chip != null)
+        {
+            var c = b.Eject(_sel);
+            _inHand[_sel] = c;
+            Say($"Вынут: {c.Label}");
+        }
+        else
+        {
+            if (!_inHand.Remove(_sel, out var c)) c = _variants[_sel][_variantIdx[_sel]]();
+            b.Insert(c);
+            Say($"Вставлен: {c.Label}");
+        }
+    }
+
+    void NextVariant()
+    {
+        var b = _girl?.Brain;
+        if (b == null) return;
+        var list = _variants[_sel];
+        _variantIdx[_sel] = (_variantIdx[_sel] + 1) % list.Length;
+        b.Eject(_sel);
+        _inHand.Remove(_sel);
+        var c = list[_variantIdx[_sel]]();
+        b.Insert(c);
+        Say($"Горячая замена: {c.Label}");
+    }
+
+    public override void _Draw()
+    {
+        DrawRect(new Rect2(-20000, 0, 40000, 2000), new Color(0.16f, 0.17f, 0.21f));
+        for (int x = -10000; x <= 10000; x += 50)
+            DrawLine(new Vector2(x, 0), new Vector2(x, x % 250 == 0 ? 8 : 4), new Color(0.3f, 0.32f, 0.38f));
+    }
+
+    public override void _UnhandledInput(InputEvent e)
+    {
+        if (e is InputEventKey { Pressed: true, Echo: false } k)
+        {
+            int idx = (int)k.Keycode - (int)Key.Key1;
+            if (idx >= 0 && idx < BrainPanel.Order.Length)
+            {
+                _sel = BrainPanel.Order[idx];
+                _panel.Selected = _sel;
+                return;
+            }
+
+            switch (k.Keycode)
+            {
+                case Key.R: Spawn(); break;
+                case Key.Space: ToggleSlot(); break;
+                case Key.Tab: NextVariant(); break;
+                case Key.G:
+                    if (_girl == null) break;
+                    _girl.GyroOn = !_girl.GyroOn;
+                    Say($"Гироскоп: {(_girl.GyroOn ? "вкл" : "выкл")}");
+                    break;
+                case Key.K:
+                    _damageMode = (DamageMode)(((int)_damageMode + 1) % 3);
+                    if (_girl?.Dur != null) _girl.Dur.Mode = _damageMode;
+                    Say($"Режим износа: {_damageMode}");
+                    break;
+                case Key.J:
+                    if (_girl?.Dur == null) break;
+                    _girl.Dur.AgeStops(0.3f);
+                    Say("Упоры состарены на 30%");
+                    break;
+                case Key.H:
+                    if (_girl?.Dur == null) break;
+                    Array.Fill(_girl.Temp, _girl.Ambient);
+                    Array.Clear(_girl.Damage);
+                    _girl.Dur.Repair();
+                    Say("Полный ремонт: катушки, упоры, проводка, хладагент");
+                    break;
+                case Key.Q: Push(-1); break;
+                case Key.E: Push(+1); break;
+            }
+        }
+        else if (e is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
+        {
+            if (mb.Pressed) TryGrab(GetGlobalMousePosition());
+            else { _drag = null; _dragLine.ClearPoints(); }
+        }
+    }
+
+    void Push(int dir)
+    {
+        if (_girl?.Bodies == null) return;
+        _girl.Bodies[_girl.Chest].ApplyCentralImpulse(new Vector2(dir * 2500f, 0));
+    }
+
+    void TryGrab(Vector2 p)
+    {
+        if (_girl == null) return;
+        var q = new PhysicsPointQueryParameters2D { Position = p, CollisionMask = 0xFFFFFFFE, CollideWithBodies = true };
+        var hits = GetWorld2D().DirectSpaceState.IntersectPoint(q, 8);
+        RigidBody2D best = null;
+        foreach (var h in hits)
+            if (h["collider"].AsGodotObject() is RigidBody2D rb && (best == null || rb.ZIndex > best.ZIndex))
+                best = rb;
+        if (best == null) return;
+        _drag = best;
+        _dragLocal = best.ToLocal(p);
+    }
+
+    public override void _PhysicsProcess(double delta)
+    {
+        if (_girl != null && _girl.Broken)
+        {
+            _girl.QueueFree();
+            _girl = null; _panel.Girl = null; _drag = null;
+            _dragLine.ClearPoints();
+            return;
+        }
+
+        if (_drag == null || !IsInstanceValid(_drag)) return;
+        Vector2 target = GetGlobalMousePosition();
+        Vector2 p = _drag.ToGlobal(_dragLocal);
+        Vector2 r = p - _drag.GlobalPosition;
+        float w = _drag.AngularVelocity;
+        Vector2 v = _drag.LinearVelocity + new Vector2(-w * r.Y, w * r.X);
+        float m = Math.Min(DragMaxMass, _drag.Mass * 4f);
+        Vector2 f = m * (DragK * (target - p) - DragD * v);
+        _drag.ApplyForce(f.LimitLength(48f * Ragdoll.Gravity * 2f), r);
+        _dragLine.Points = new[] { p, target };
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_girl?.Bodies == null || _girl.Broken) return;
+        float dt = (float)delta;
+        var chest = _girl.Bodies[_girl.Chest];
+        var want = new Vector2(chest.GlobalPosition.X, -90);
+        _cam.Position = _cam.Position.Lerp(want, 1f - Mathf.Exp(-3f * dt));
+    }
+}
+```
+</details>

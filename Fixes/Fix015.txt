@@ -1,0 +1,43 @@
+# Fix015: RECOVER на базе скриптового шага (capture point) + мягкая постановка стопы + штраф удара
+Режим: Agent. По спецификации: если устройство кода не совпадает с описанием — НЕ выдумывать, процитировать код и СТОП по этому пункту (остальные пункты выполнить).
+Код содержит Fix007–Fix014.
+
+## 0. Разведка (в отчёт дословно)
+a) `MotorRom.ApplyCapturePointStep` целиком, поле `CapturePointStepping` (значение по умолчанию), все параметры шага, как заполняется `b.SwingingJoints`, какие фазы шага есть.
+b) Где сейчас переключается `CapturePointStepping` (клавиша/флаг диагностики).
+c) Флаг «минимальный уровень», который добавил пользователь: где он и как называется.
+
+## 1. Шаг в базе NN (`NeuralMotorChip`)
+- `public bool BaseStepping = true;` → перед `_base.Tick` выставлять `_base.CapturePointStepping = BaseStepping`.
+- Убедиться, что после `_base.Tick` NN НЕ очищает `b.SwingingJoints` (это должен видеть рефлекс).
+
+## 2. Поправки NN по группам суставов + сглаживание
+Поля: `public float ResTargetUpper = 0.5f, ResTargetLeg = 0.2f, ResTargetSwing = 0.1f, ResTau = 0.06f;`
+Группы определить один раз в Reset по именам: leg = hip*, knee*, ankle*; остальные upper.
+Сырые tanh-поправки сглаживать: `_rt[j] += (tanh(oT[j]) - _rt[j]) * min(1, dt/ResTau)`, то же `_rs[j]` для stiff (массивы-поля).
+```
+float scale = b.SwingingJoints[j] ? ResTargetSwing : (isLeg[j] ? ResTargetLeg : ResTargetUpper);
+MotorTarget[j] = clamp(_baseT[j] + scale * _rt[j], lo, hi);
+MotorStiff[j]  = b.SwingingJoints[j] ? _baseS[j] : clamp(_baseS[j] + ResStiff * _rs[j], 0, 1);
+```
+При Reset/смене чипа обнулить `_rt`, `_rs`.
+
+## 3. Мягкая постановка стопы (`ApplyCapturePointStep`)
+По спецификации, адаптировать к фазам из 0a:
+- Последние `LandPhase = 0.35` доли переноса: жёсткость маховых hip/knee → `LandStiff = 0.25`, цель голеностопа маховой ноги → такая, чтобы стопа была горизонтальна (угол стопы к миру ≈ 0: ankle = −(поворот голени в мире) с учётом знаков Ragdoll), колено держать согнутым не меньше `LandKnee = 0.25` рад до касания.
+- После касания маховой стопы: жёсткость этой ноги нарастает от LandStiff до базовой за `LandRamp = 0.12` с.
+Если фаз нет (шаг — один целевой угол без времени) — добавить свою фазу по времени от отрыва стопы (`_air`), описать. Если не получается однозначно — СТОП по этому пункту и процитировать.
+
+## 4. Рефлекс колена не конфликтует со скриптом (`RomChips.cs`)
+В блоке «перенос: колено сгибается…» добавить условие: `!b.SwingingJoints[KneeOf(body, a)]`.
+
+## 5. Штраф и метрика удара стопы (`RecoverEpisode`)
+Параметры в RecoverTask: `public float ImpactCost = 2f, ImpactFree = 60f;` (px/s).
+В месте подсчёта `_toggles`: при переходе стопы false→true взять `vy = max(0, Bodies[foot].LinearVelocity.Y)` (Y вниз),
+`pen = ImpactCost * sq(max(0, vy - ImpactFree) / 100)`; добавить к `_penalties[0]` (или новому терму "Impact", если список термов легко расширяется — предпочтительно), вычесть из rew; `_maxImpact = max(_maxImpact, vy)`.
+Только после `_pushed`. В лог экзамена: ` удар={_maxImpact:0}`.
+
+## 6. Клавиша для ручной проверки
+В Main: клавиша **C** — переключить `CapturePointStepping` у MOTOR ROM в слоте (если там ROM) и `BaseStepping` у NN; печать `CP STEP ON/OFF`. Если C занята — взять свободную, сообщить.
+
+## 7. `dotnet build`, отчёт: шаг 0 дословно, до/после 1–5, что с фазами в шаге 3.

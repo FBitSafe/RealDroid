@@ -1,0 +1,173 @@
+Fix016 — починка шага MOTOR ROM и многоуровневый приёмочный тест
+Дата: 2026-10-06
+
+0. Разведка
+
+Продолжая незавершённую работу Fix016, в `MotorRom.SetSwingTargets` уже были
+внесены ограничения до начала этой сессии: достижимая длина ноги 0.95,
+`SwingKneeMax`, запас hip 0.05 рад и посадочная фаза. Полный код функции,
+проверенный в ходе этой работы:
+
+    void SetSwingTargets(Ragdoll body, Brain brain, int foot, float targetX, float targetY, float progress)
+    {
+        bool near = foot == body.FootNear;
+        string suffix = near ? "n" : "f";
+        int hip = body.Def.JointIndex($"hip_{suffix}");
+        int knee = body.Def.JointIndex($"knee_{suffix}");
+        int ankle = body.Def.JointIndex($"ankle_{suffix}");
+        if (hip < 0 || knee < 0 || ankle < 0) return;
+
+        Vector2 hipPoint = body.JointPos(hip);
+        var ankleDef = body.Def.Joints[ankle];
+        var footDef = body.Def.Parts[foot];
+        Vector2 ankleOffset = ankleDef.Anchor - footDef.Center;
+        Vector2 ankleTarget = new(targetX + ankleOffset.X, targetY + ankleOffset.Y);
+        Vector2 toTarget = ankleTarget - hipPoint;
+        float thighLength = body.Def.Parts[body.Def.PartIndex(near ? "thigh_n" : "thigh_f")].Length;
+        float shinLength = body.Def.Parts[body.Def.PartIndex(near ? "shin_n" : "shin_f")].Length;
+        float maxReach = 0.95f * (thighLength + shinLength);
+        float distance = Math.Clamp(toTarget.Length(), 1f, maxReach);
+        if (toTarget.Length() > maxReach)
+            toTarget = toTarget.Normalized() * maxReach;
+        float kneeAngle = MathF.Acos(Math.Clamp(
+            (thighLength * thighLength + shinLength * shinLength - distance * distance) /
+            (2f * thighLength * shinLength), -1f, 1f));
+        kneeAngle = Math.Clamp(kneeAngle, 0f, SwingKneeMax);
+        float targetBearing = -MathF.Atan2(toTarget.X, toTarget.Y);
+        float thighRotation = targetBearing - MathF.Atan2(
+            shinLength * MathF.Sin(kneeAngle),
+            thighLength + shinLength * MathF.Cos(kneeAngle));
+        float pelvisRotation = body.Bodies[body.Pelvis].GlobalRotation;
+        float thighTarget = Mathf.Wrap(thighRotation - pelvisRotation, -Mathf.Pi, Mathf.Pi);
+        var hipDef = body.Def.Joints[hip];
+        float hipLo = Math.Min(hipDef.Lower + 0.05f, hipDef.Upper - 0.05f);
+        float hipHi = Math.Max(hipDef.Lower + 0.05f, hipDef.Upper - 0.05f);
+        thighTarget = Math.Clamp(thighTarget, hipLo, hipHi);
+        float kneeTarget = kneeAngle;
+        float shinRotation = thighRotation + kneeAngle;
+        float ankleTargetAngle = Mathf.Wrap(-shinRotation, -Mathf.Pi, Mathf.Pi);
+
+        brain.MotorTarget[hip] = Math.Clamp(thighTarget, body.Def.Joints[hip].Lower, body.Def.Joints[hip].Upper);
+        brain.MotorTarget[knee] = Math.Clamp(kneeTarget, body.Def.Joints[knee].Lower, body.Def.Joints[knee].Upper);
+        brain.MotorTarget[ankle] = Math.Clamp(ankleTargetAngle, body.Def.Joints[ankle].Lower, body.Def.Joints[ankle].Upper);
+        brain.MotorStiff[hip] *= SwingStiffness;
+        brain.MotorStiff[knee] *= SwingStiffness;
+        brain.MotorStiff[ankle] *= SwingStiffness;
+        if (progress >= 1f - LandPhase)
+        {
+            brain.MotorStiff[hip] = LandStiff;
+            brain.MotorStiff[knee] = LandStiff;
+            brain.MotorTarget[knee] = Math.Clamp(
+                Math.Max(brain.MotorTarget[knee], LandKnee),
+                body.Def.Joints[knee].Lower, body.Def.Joints[knee].Upper);
+        }
+        if (progress < 1f)
+        {
+            brain.SwingingJoints[hip] = true;
+            brain.SwingingJoints[knee] = true;
+            brain.SwingingJoints[ankle] = true;
+        }
+    }
+
+Исходная посадочная фаза Fix015 сохраняла цели бедра/колена и удерживала
+жёсткость на LandStiff, пока стопа не касалась пола. При контакте жёсткость
+переходила к базовой за LandRamp; завершение дуги без контакта оставляло ногу
+в посадочном состоянии навсегда. В настоящем исправлении посадочная цель Y
+равна `_swingStartY + LandPress`.
+
+1. Выполненные изменения
+
+- Посадка без контакта ограничена LandTimeout=0.2 с: целевое колено ведётся к
+  LandKnee, бедро и голеностоп — к базовой позе, жёсткость всех трёх суставов
+  — к базовой. Таймаут завершает шаг, снимает SwingingJoints и учитывается в
+  CapturePointTimeouts.
+- Контакт завершает шаг после LandRamp. CapturePointTimeouts учитываются
+  отдельно от CapturePointSteps.
+- Цель стопы ограничивается расстоянием 0.95 от суммы длин бедра и голени;
+  цель hip ограничена суставными пределами с inset 0.05 рад; цель колена при
+  переносе ограничена SwingKneeMax=1.2 рад. Геометрический расчёт предельного
+  горизонтального выноса выполнен в Reset один раз на ROM-чип.
+- Если шаг закончился с ξ за границей опоры, другая нога может шагнуть после
+  RearmDelay=0.08 с; серия ограничена тремя шагами и сбрасывается при возврате
+  ξ в опору.
+- После 0.3 с внутри опоры при двух стопах на полу и spread больше ExitSpread
+  выполняется один приставной шаг дальней от ξ ногой к другой стопе с зазором
+  5 px. Повторное срабатывание блокируется до нового выхода ξ за опору.
+- Добавлен --levels с четырьмя экзаменами на уровень. Экзамен проходит, если
+  персонаж не упал и RecoverTask вернул его в STAND. Тест запускает MOTOR ROM
+  без загрузки/сохранения нейронных весов. Swing-leg reflex protection включена
+  по умолчанию.
+- Вычисленный геометрический горизонтальный вынос: BackStepMax=62.0 px,
+  FwdStepMax=82.0 px.
+
+2. Проверка
+
+`dotnet build`: успешно, 0 предупреждений, 0 ошибок.
+
+Команда:
+
+    Godot_v4.7.2-stable_mono_win64_console.exe --headless --path "C:\Users\fbits\OneDrive\Documents\new-game-project" "res://Dream.tscn" -- --sector RECOVER --motor-rom-step-test --levels 0.3,0.5,0.7
+
+Фактический вывод:
+
+    Godot Engine v4.7.2.stable.mono.official.ed1daf0bf - https://godotengine.org
+    Пустой чип, 4170 параметров
+    Сектор RECOVER, общие веса x1.00, повторение: 1, травмы: нет
+    ROM test, levels=0.3,0.5,0.7; neural weights will not be used or saved.
+      exam0 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+      exam1 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+      exam2 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+      exam3 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+    ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.11, impact=0, ticks=1800/1800
+    ROM step exam 2/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.15, impact=0, ticks=1800/1800
+    ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.11, impact=0, ticks=1800/1800
+    ROM step exam 4/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.15, impact=0, ticks=1800/1800
+    ROMSTEP level=0.30 pass=4/4 steps=[0,0,0,0] timeouts=[0,0,0,0] kneeMax=0.15 impactMax=0 back=СТОИТ/СТОИТ reach(back=62.0px,forward=82.0px) swing-leg-reflex-protection=on.
+      exam0 толчок +50% СТОИТ t=7.50s recover=0.80s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+      exam1 толчок -50% СТОИТ t=7.50s recover=2.60s шаг=29px acute=0.00 поза=0.98 дребезг=10 колено=1.22 удар=66
+      exam2 толчок +50% СТОИТ t=7.50s recover=1.20s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+      exam3 толчок -50% СТОИТ t=7.50s recover=2.50s шаг=29px acute=0.00 поза=0.98 дребезг=10 колено=1.24 удар=66
+    ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.13, impact=0, ticks=1800/1800
+    ROM step exam 2/4: passed=True, survived=True, steps=3, timeouts=2, knee=1.22, impact=66, ticks=1800/1800
+    ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.13, impact=0, ticks=1800/1800
+    ROM step exam 4/4: passed=True, survived=True, steps=3, timeouts=2, knee=1.24, impact=66, ticks=1800/1800
+    ROMSTEP level=0.50 pass=4/4 steps=[0,3,0,3] timeouts=[0,2,0,2] kneeMax=1.24 impactMax=66 back=СТОИТ/СТОИТ reach(back=62.0px,forward=82.0px) swing-leg-reflex-protection=on.
+      exam0 толчок +70% ПАДЕНИЕ(голова) t=2.83s recover=1.83s шаг=42px acute=1.00(thoracic@2.83s) поза=0.00 дребезг=28 колено=1.44 удар=47
+      exam2 толчок +70% ПАДЕНИЕ(голова) t=2.99s recover=1.99s шаг=34px acute=1.00(lumbar@2.96s) поза=0.00 дребезг=24 колено=1.23 удар=168
+      exam3 толчок -70% ПАДЕНИЕ(голова) t=3.33s recover=2.33s шаг=39px acute=0.00 поза=0.00 дребезг=22 колено=1.35 удар=82
+      exam1 толчок -70% ПАДЕНИЕ(голова) t=3.77s recover=2.77s шаг=42px acute=0.24(ankle_n@2.88s) поза=0.00 дребезг=21 колено=1.30 удар=89
+    ROM step exam 1/4: passed=False, survived=False, steps=4, timeouts=0, knee=1.44, impact=47, ticks=680/1800
+    ROM step exam 2/4: passed=False, survived=False, steps=4, timeouts=0, knee=1.30, impact=89, ticks=905/1800
+    ROM step exam 3/4: passed=False, survived=False, steps=8, timeouts=0, knee=1.23, impact=168, ticks=718/1800
+    ROM step exam 4/4: passed=False, survived=False, steps=6, timeouts=0, knee=1.35, impact=82, ticks=800/1800
+    ROMSTEP level=0.70 pass=0/4 steps=[4,4,8,6] timeouts=[0,0,0,0] kneeMax=1.44 impactMax=168 back=ПАДЕНИЕ/ПАДЕНИЕ reach(back=62.0px,forward=82.0px) swing-leg-reflex-protection=on.
+
+Уровни 0.30 и 0.50 прошли 4/4; на 0.70 все экзамены закончились падением.
+Измеренный kneeMax — фактический угол сустава во время динамики и может
+превышать 1.2 рад, хотя целевая команда колена во время переноса ограничена
+этим значением.
+
+3. Постепенное уменьшение CP-step assist в NN training
+
+По запросу добавлена линейная интерполяция между базовым MOTOR NN/ROM выходом
+и MOTOR ROM capture-point step. `--cp-step-fade-gens N` управляет длиной
+затухания; по умолчанию N=100 Recover-поколений. На поколении 0 помощь равна
+100%, затем линейно уменьшается до 0% к указанному номеру поколения; значение
+0 отключает помощь сразу. Счётчик Recover-поколений берётся из
+`SectorGen[RECOVER]`, включая локальный прогресс текущего Recover-training
+сеанса. Скаляр затухания применяется к целям и жёсткости суставов шага; NN
+остаточные поправки остаются без изменений. Флаг `--no-cp-step` по-прежнему
+немедленно отключает CP-step вне зависимости от расписания.
+
+Флаг можно настроить в Godot Inspector через `CpStepFadeGenerations` или при
+запуске, например:
+
+    --sector RECOVER --cp-step-fade-gens 50
+
+Начальный лог показывает текущую долю и длину расписания; лог каждого
+поколения содержит `CP step NN%`.
+
+После изменения: `dotnet build` успешно (0 warnings/errors); headless smoke
+test `--sector RECOVER --motor-rom-step-test --levels 0.5` завершился и
+сохранил прежнее поведение полного ROM assist: 4/4 прошли, шаги
+`[0,3,0,3]`, таймауты `[0,2,0,2]`.

@@ -1,0 +1,1361 @@
+# Задание для агента: уровни боли и шаг 2 (нейросетевая моторная кора с секторами, сон v2)
+
+## Контекст
+
+- Проект на Godot 4 .NET, C#. Все скрипты лежат в корне `res://`, пространств имён нет.
+- Узлы создаются из кода. Сцены: `Main.tscn` (скрипт `Main.cs`) и `Dream.tscn` (скрипт `Dream.cs`).
+- Физика 240 Гц.
+- Существующие файлы: `RagdollDef.cs`, `PartBody.cs`, `Brain.cs`, `RomChips.cs`, `Ragdoll.cs`, `DebugOverlay.cs`, `BrainPanel.cs`, `Main.cs`, `Durability.cs`, `DamageFx.cs`, `Nociception.cs`, `EsOptimizer.cs`.
+
+## Правила
+
+1. Трогай только перечисленные ниже файлы. Код вставляй дословно, без рефакторинга, переименований и «улучшений».
+2. Операция `EDIT` состоит из точного якоря и замены. Если якорь не найден ровно один раз, **остановись и сообщи**, ничего не придумывай.
+3. Операция `REPLACE` заменяет всё содержимое файла. Операция `CREATE` создаёт новый файл.
+4. После всех операций выполни проверку из раздела «Проверка» и выдай отчёт в формате из раздела «Отчёт».
+
+---
+
+## 0. Предварительная проверка
+
+- Выполни `grep -rn "class NeuralChip\|class MotorChips\|class PostureChip" --include=*.cs .`. Совпадений быть не должно. Если они есть, перенеси эти файлы за пределы проекта в `../archive/` и запиши это в отчёт.
+- Проверь, существует ли `res://Dream.tscn`. Если нет, создай его:
+
+```
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://Dream.cs" id="1"]
+
+[node name="Dream" type="Node2D"]
+script = ExtResource("1")
+```
+
+Если файл есть, но у корневого узла нет скрипта или стоит другой, назначь `res://Dream.cs`.
+
+---
+
+## 1. REPLACE `Nociception.cs`
+
+```csharp
+using System;
+
+/// Ноцицепторы суставов (железо, общий кабель с энкодерами).
+/// Discomfort — безвредные стимулы (край хода, тёплая катушка). Привыкает. Рефлекса нет.
+/// Ache       — обычная боль: за упором, защемление, горячая катушка, фантомы. Отдёргивание.
+/// Acute      — острая: удар в упор, КЗ, перегрев выше критического, разрыв. Реакция всего тела.
+/// Каждый уровень 0..1 на сустав. Total: [0] дискомфорт, [1] боль, [2] острая — по телу.
+public sealed class Nociception
+{
+    // дискомфорт
+    public float ComfortZone = 0.05f;          // рад до упора
+    public float EdgeGain = 0.3f;
+    public float WarmStart = 60f, WarmSpan = 25f, WarmGain = 0.5f;
+    public float HabituationTau = 4f, Habituation = 0.8f;
+    // боль
+    public float StopFree = 0.03f, StopGain = 6f;   // лёгкий контакт с упором не болит
+    public float PinchGain = 1.5f;
+    public float HeatStart = 85f;
+    public float PhantomRate = 3f;
+    public float Sensitization = 1f, SensitizeTau = 8f;
+    // острая
+    public float ImpactSpeed = 4f, ImpactSpan = 8f; // рад/с в упор
+    public float ShortJolt = 1f, BreakJolt = 1.5f, HoseJolt = 0.6f;
+    // затухание
+    public float DiscomfortDecay = 0.5f, AcheDecay = 0.4f, AcuteDecay = 0.15f;
+
+    public readonly float[] Discomfort, Ache, Acute, Limit, Side, Total;
+
+    readonly Ragdoll _b;
+    readonly float[] _hab, _sens;
+    readonly bool[] _wasBroken, _wasCut, _wasHose;
+    readonly Random _rng = new(17);
+
+    public Nociception(Ragdoll b, Brain br)
+    {
+        _b = b;
+        int nj = b.Def.Joints.Count;
+        Discomfort = br.Bus.Add("pain.discomfort", nj);
+        Ache       = br.Bus.Add("pain.ache", nj);
+        Acute      = br.Bus.Add("pain.acute", nj);
+        Limit      = br.Bus.Add("pain.limit", nj);
+        Side       = br.Bus.Add("pain.side", nj);
+        Total      = br.Bus.Add("pain.total", 3);
+        _hab = new float[nj]; _sens = new float[nj];
+        _wasBroken = new bool[nj]; _wasCut = new bool[nj]; _wasHose = new bool[nj];
+    }
+
+    /// 0 — нет, 0..1 дискомфорт, 1..2 боль, 2..3 острая
+    public float Level(int j) =>
+        Acute[j] > 0.05f ? 2f + Acute[j] : Ache[j] > 0.05f ? 1f + Ache[j] : Discomfort[j];
+
+    public void Tick(float dt)
+    {
+        var b = _b;
+        var d = b.Dur;
+        float kD = MathF.Exp(-dt / DiscomfortDecay), kA = MathF.Exp(-dt / AcheDecay);
+        float kX = MathF.Exp(-dt / AcuteDecay), kS = MathF.Exp(-dt / SensitizeTau);
+        int nj = Ache.Length;
+        float maxD = 0, maxA = 0, maxX = 0, sumD = 0, sumA = 0, sumX = 0;
+
+        for (int j = 0; j < nj; j++)
+        {
+            float dr = 0f, ar = 0f, xr = 0f, lr = 0f;
+
+            bool broken = d.StopBroken(j);
+            bool cut = d.Effects && d.CableCut[j];
+            bool hose = d.Effects && d.HoseTorn[j];
+            if (broken && !_wasBroken[j]) xr += BreakJolt;
+            if (cut && !_wasCut[j]) xr += BreakJolt;      // последний сигнал перед онемением
+            if (hose && !_wasHose[j]) ar += HoseJolt;
+            _wasBroken[j] = broken; _wasCut[j] = cut; _wasHose[j] = hose;
+
+            if (!cut)
+            {
+                var jd = b.Def.Joints[j];
+                float a = b.Angle[j];
+                float lo = a - jd.Lower, hi = jd.Upper - a;
+                float edge = MathF.Min(lo, hi);
+                float side = lo < hi ? -1f : 1f;
+
+                if (!broken)
+                {
+                    if (edge < ComfortZone)
+                    {
+                        float e = Math.Clamp((ComfortZone - edge) / ComfortZone, 0f, 1f);
+                        dr += EdgeGain * e * e;
+                    }
+                    if (edge < 0f)
+                    {
+                        float into = side * b.AngVel[j];
+                        if (into > ImpactSpeed)
+                        {
+                            float x = (into - ImpactSpeed) / ImpactSpan;
+                            xr += x; lr += x; Side[j] = side;
+                        }
+                        float over = -edge - StopFree;
+                        if (over > 0f)
+                        {
+                            float p = StopGain * over * (1f + d.StopWear[j]);
+                            ar += p; lr += p; Side[j] = side;
+                        }
+                    }
+                }
+
+                if (d.Effects)
+                {
+                    float turns = MathF.Abs(d.Twist[j]);
+                    if (turns > d.TwistFree)
+                    {
+                        float p = PinchGain * (turns - d.TwistFree);
+                        ar += p; lr += p; Side[j] = MathF.Sign(d.Twist[j]);
+                        if (turns > d.HoseTurns) xr += 0.5f * (turns - d.HoseTurns);
+                    }
+                    if (d.ShortTime[j] > 0f) xr += ShortJolt;
+
+                    float bare = Math.Clamp((d.ShortThreshold - d.Insulation[j]) / d.ShortThreshold, 0f, 1f);
+                    if (bare > 0f && _rng.NextDouble() < PhantomRate * bare * dt)
+                    {
+                        float p = 0.4f + 0.6f * (float)_rng.NextDouble();
+                        ar += p; lr += p; Side[j] = _rng.Next(2) * 2 - 1;
+                    }
+                }
+
+                float T = b.Temp[j];
+                if (T > WarmStart) dr += WarmGain * Math.Clamp((T - WarmStart) / WarmSpan, 0f, 1f);
+                if (T > HeatStart) ar += (T - HeatStart) / Math.Max(b.CritTemp - HeatStart, 1f);
+                if (T > b.CritTemp) xr += (T - b.CritTemp) / 20f;
+            }
+
+            // привыкание к дискомфорту
+            _hab[j] += (dr - _hab[j]) * Math.Min(1f, dt / HabituationTau);
+            dr = MathF.Max(0f, dr - Habituation * _hab[j]);
+
+            // сенсибилизация: после острой боли сустав болит сильнее
+            _sens[j] = MathF.Max(_sens[j] * kS, MathF.Min(1f, xr));
+            float sens = 1f + Sensitization * _sens[j];
+            ar *= sens; lr *= sens;
+
+            Discomfort[j] = MathF.Min(1f, MathF.Max(dr, Discomfort[j] * kD));
+            Ache[j]       = MathF.Min(1f, MathF.Max(ar, Ache[j] * kA));
+            Acute[j]      = MathF.Min(1f, MathF.Max(xr, Acute[j] * kX));
+            Limit[j]      = MathF.Min(1f, MathF.Max(lr, Limit[j] * kA));
+
+            maxD = MathF.Max(maxD, Discomfort[j]); sumD += Discomfort[j];
+            maxA = MathF.Max(maxA, Ache[j]);       sumA += Ache[j];
+            maxX = MathF.Max(maxX, Acute[j]);      sumX += Acute[j];
+        }
+
+        Total[0] = MathF.Min(1f, maxD + 0.2f * sumD / nj);
+        Total[1] = MathF.Min(1f, maxA + 0.2f * sumA / nj);
+        Total[2] = MathF.Min(1f, maxX + 0.2f * sumX / nj);
+    }
+}
+```
+
+---
+
+## 2. EDIT `RomChips.cs`
+
+### 2a. Заменить класс `ReflexRom` целиком
+
+Удали всё от строки `// ───────── РЕФЛЕКСЫ ─────────` включительно до строки `// ───────── АРБИТР ─────────` **не включительно** и вставь на это место:
+
+```csharp
+// ───────── РЕФЛЕКСЫ ─────────
+public sealed class ReflexRom : IChip
+{
+    public LobeKind Kind => LobeKind.Reflex;
+    public string Label { get; private set; }
+    public float AnkleGain = 4f, AnkleDamp = 0.6f, AnkleMax = 0.8f, HipGain = 0.8f, SpineGain = 0.4f;
+    public float Scale = 1f;
+
+    // боль (направленная): отдёргивание внутрь хода
+    public float WithdrawGain = 2f, WithdrawStep = 0.3f, WithdrawStiff = 0.6f;
+    // острая: оцепенение всего тела
+    public float GuardThreshold = 0.05f, GuardFreeze = 0.5f, GuardStiff = 0.5f, FlinchInhibit = 0.3f;
+    // дискомфорт рефлекса не вызывает — он для драйвов и решений
+
+    public static ReflexRom Stock() => new() { Label = "REFLEX ROM 1.2" };
+    public static ReflexRom Hyper() => new()
+        { Label = "REFLEX x2.5", Scale = 2.5f, WithdrawGain = 5f, GuardStiff = 1f, FlinchInhibit = 0.6f };
+
+    float[] _limit, _side, _total;
+
+    public void Reset(Brain b)
+    {
+        b.Bus.Channels.TryGetValue("pain.limit", out _limit);
+        b.Bus.Channels.TryGetValue("pain.side", out _side);
+        b.Bus.Channels.TryGetValue("pain.total", out _total);
+    }
+
+    public void Tick(Brain b, float dt)
+    {
+        var body = b.Body;
+        var bl = b.Balance;
+        Array.Clear(b.ReflexTarget);
+        Array.Clear(b.ReflexStiff);
+        b.ReflexInhibit[0] = 0f;
+
+        if (bl[Bal.Lying] < 0.5f)
+        {
+            if (bl[Bal.Support] > 0.5f)
+            {
+                float off = Scale * (AnkleGain * bl[Bal.ComX] + AnkleDamp * bl[Bal.ComVx]);
+                off = Math.Clamp(off, -AnkleMax, AnkleMax);
+                foreach (int a in body.Ankles) b.ReflexTarget[a] += off;
+            }
+            foreach (int h in body.Hips)  b.ReflexTarget[h] += Scale * HipGain * bl[Bal.PelvisTilt];
+            foreach (int s in body.Spine) b.ReflexTarget[s] -= Scale * SpineGain * bl[Bal.ChestTilt];
+        }
+
+        if (_limit == null || _side == null) return;
+        int n = _limit.Length;
+        Span<bool> withdrawn = stackalloc bool[n];
+        for (int j = 0; j < n; j++)
+        {
+            float w = Math.Min(1f, _limit[j] * WithdrawGain);
+            if (w < 0.01f) continue;
+            withdrawn[j] = true;
+            float desired = b.Angle[j] - _side[j] * WithdrawStep;
+            float delta = desired - b.MotorTarget[j];
+            b.ReflexTarget[j] += w * (delta - b.ReflexTarget[j]);
+            b.ReflexStiff[j] = Math.Max(b.ReflexStiff[j], w * WithdrawStiff);
+        }
+
+        float x = _total != null ? _total[2] : 0f;
+        if (x <= GuardThreshold) return;
+        float f = Math.Min(1f, GuardFreeze * x);
+        for (int j = 0; j < n; j++)
+        {
+            if (withdrawn[j]) continue;
+            float hold = b.Angle[j] - b.MotorTarget[j];
+            b.ReflexTarget[j] += f * (hold - b.ReflexTarget[j]);
+            b.ReflexStiff[j] = Math.Max(b.ReflexStiff[j], GuardStiff * x);
+        }
+        b.ReflexInhibit[0] = Math.Min(1f, FlinchInhibit * x);
+    }
+}
+
+```
+
+### 2b. Сделать позу STAND публичной
+
+Якорь:
+```csharp
+    static (float, float) Stand(string s) =>
+```
+Замена:
+```csharp
+    public static (float, float) Stand(string s) =>
+```
+
+---
+
+## 3. EDIT `BrainPanel.cs`
+
+### 3a. Якорь
+```csharp
+                          PainC = new(1f, 0.3f, 0.5f);
+```
+Замена:
+```csharp
+                          PainC = new(1f, 0.3f, 0.5f), Discomf = new(0.85f, 0.75f, 0.45f);
+```
+
+### 3b. Якорь
+```csharp
+        float pain = n?.Total[0] ?? 0f;
+        Text(10, y, "Боль", pain > 0.3f ? PainC : Dim);
+        Bar(60, y, 160, pain, PainC);
+```
+Замена:
+```csharp
+        float[] pt = n?.Total;
+        if (pt != null)
+        {
+            Text(10, y, "Дискомфорт", Dim, 11);  Bar(85, y, 60, pt[0], Discomf);
+            Text(155, y, "Боль", Dim, 11);       Bar(190, y, 60, pt[1], PainC);
+            Text(260, y, "Острая", Dim, 11);     Bar(310, y, 60, pt[2], Burn);
+        }
+```
+
+### 3c. Якорь
+```csharp
+            else if (n != null) Bar(342, y, 35, n.Pain[j], PainC);
+```
+Замена:
+```csharp
+            else if (n != null)
+            {
+                var pc = n.Acute[j] > 0.05f ? Burn : n.Ache[j] > 0.05f ? PainC : Discomf;
+                Bar(342, y, 35, n.Level(j) / 3f, pc);
+            }
+```
+
+### 3d. Якорь
+```csharp
+        string st = b.Slots[(int)LobeKind.Arbiter].Chip is ArbiterRom a ? a.StateName : "заклинило";
+```
+Замена:
+```csharp
+        string st = ArbiterInfo.State(b);
+```
+
+---
+
+## 4. EDIT `DebugOverlay.cs`
+
+Якорь:
+```csharp
+        string st = Girl.Brain.Slots[(int)LobeKind.Arbiter].Chip is ArbiterRom a ? a.StateName : "заклинило";
+```
+Замена:
+```csharp
+        string st = ArbiterInfo.State(Girl.Brain);
+```
+
+---
+
+## 5. EDIT `PartBody.cs`
+
+### 5a. Якорь
+```csharp
+    public float EyeGlow, Heat, Wear;
+```
+Замена:
+```csharp
+    public float EyeGlow, Heat, Wear, Squint;
+```
+
+### 5b. Якорь
+```csharp
+            DrawCircle(new Vector2(4.2f, -1f), 1.3f, eye);
+            DrawCircle(new Vector2(7.8f, -1f), 1.3f, eye);
+```
+Замена:
+```csharp
+            float eh = Mathf.Lerp(2.6f, 0.5f, Math.Clamp(Squint, 0f, 1f));   // жмурится от боли
+            DrawRect(new Rect2(2.9f, -1f - eh * 0.5f, 2.6f, eh), eye);
+            DrawRect(new Rect2(6.5f, -1f - eh * 0.5f, 2.6f, eh), eye);
+```
+
+---
+
+## 6. EDIT `Ragdoll.cs`
+
+Якорь (внутри `UpdateVisuals`):
+```csharp
+        if (++_visTick % 12 != 0) return;
+```
+Замена:
+```csharp
+        var headBody = Bodies[Head];
+        float sq = Nerves == null ? 0f : Math.Clamp(0.4f * Nerves.Total[1] + Nerves.Total[2], 0f, 1f);
+        if (Math.Abs(sq - headBody.Squint) > 0.03f) { headBody.Squint = sq; headBody.QueueRedraw(); }
+
+        if (++_visTick % 12 != 0) return;
+```
+
+---
+
+## 7. REPLACE `EsOptimizer.cs`
+
+```csharp
+using System;
+using System.Linq;
+
+/// OpenAI-ES: антитетические пары, ранги, Adam. Scale — множитель шума и шага на параметр (0 = заморожен).
+public sealed class EsOptimizer
+{
+    public readonly float[] Theta;
+    public float[] Scale;
+    readonly int _n, _pairs;
+    readonly float _sigma, _lr;
+    readonly float[] _m, _v;
+    float[][] _eps;
+    int _t;
+    readonly Random _rng;
+
+    public int Population => _pairs * 2;
+
+    public EsOptimizer(float[] init, int pairs, float sigma, float lr, int seed)
+    {
+        Theta = (float[])init.Clone(); _n = init.Length;
+        _pairs = pairs; _sigma = sigma; _lr = lr;
+        _m = new float[_n]; _v = new float[_n];
+        _rng = new Random(seed);
+    }
+
+    float S(int i) => Scale == null ? 1f : Scale[i];
+
+    public float[][] Ask()
+    {
+        _eps = new float[_pairs][];
+        var c = new float[_pairs * 2][];
+        for (int p = 0; p < _pairs; p++)
+        {
+            var e = new float[_n]; var a = new float[_n]; var b = new float[_n];
+            for (int i = 0; i < _n; i++)
+            {
+                float s = S(i);
+                if (s == 0f) { a[i] = b[i] = Theta[i]; continue; }
+                float g = Rng.Gauss(_rng);
+                e[i] = g;
+                a[i] = Theta[i] + _sigma * s * g;
+                b[i] = Theta[i] - _sigma * s * g;
+            }
+            _eps[p] = e; c[2 * p] = a; c[2 * p + 1] = b;
+        }
+        return c;
+    }
+
+    public void Tell(float[] fitness)
+    {
+        int N = fitness.Length;
+        var idx = Enumerable.Range(0, N).OrderBy(i => fitness[i]).ToArray();
+        var rank = new float[N];
+        for (int r = 0; r < N; r++) rank[idx[r]] = r / (float)(N - 1) - 0.5f;
+
+        var g = new float[_n];
+        for (int p = 0; p < _pairs; p++)
+        {
+            float w = rank[2 * p] - rank[2 * p + 1];
+            var e = _eps[p];
+            for (int i = 0; i < _n; i++) g[i] += w * e[i];
+        }
+
+        _t++;
+        const float b1 = 0.9f, b2 = 0.999f, wd = 0.005f;
+        float c1 = 1 - MathF.Pow(b1, _t), c2 = 1 - MathF.Pow(b2, _t);
+        for (int i = 0; i < _n; i++)
+        {
+            float s = S(i);
+            if (s == 0f) continue;
+            float gi = g[i] / (_pairs * _sigma) - wd * Theta[i];
+            _m[i] = b1 * _m[i] + (1 - b1) * gi;
+            _v[i] = b2 * _v[i] + (1 - b2) * gi * gi;
+            Theta[i] += _lr * s * (_m[i] / c1) / (MathF.Sqrt(_v[i] / c2) + 1e-8f);
+        }
+    }
+}
+```
+
+---
+
+## 8. CREATE `NeuralMotorChip.cs`
+
+```csharp
+using System;
+using System.Linq;
+
+public readonly record struct MotorSpec(int In, int H1, int H2, int Out, int Sectors, uint IoHash);
+
+/// Моторная кора: один чип, общая сеть + сектора протоколов (p — вектор арбитра).
+/// h1 = tanh(W1·x + b1 + E·p) ⊙ (1 + G·p);  h2 = tanh(W2·h1 + b2);  o = W3·h2 + b3 + O·p
+/// target = tanh(o) в диапазон сустава (0 → 0 рад), stiffness = sigmoid(o − StiffBias)
+public sealed class NeuralMotorChip : IChip
+{
+    public const float StiffBias = 2.5f;
+    public const string Format = "motor_v3";
+
+    public LobeKind Kind => LobeKind.Motor;
+    public string Label => Burnt ? $"{Name} СГОРЕЛ" : $"{Name} g{Generation}";
+
+    public readonly MotorSpec Spec;
+    public readonly float[] W;
+    public readonly float[] Maturity;
+    public readonly int[] SectorGen;
+    public string Name = "MOTOR NN";
+    public int Generation;
+    public bool Burnt;
+
+    readonly int _oW1, _oB1, _oE, _oG, _oW2, _oB2, _oW3, _oB3, _oO, _count;
+    readonly float[] _x, _h1, _h2, _o;
+    float[] _pain, _lo, _hi;
+
+    // вход: углы, скорости, vest.balance, pain.total[3], cmd[4]
+    public static int InputSize(int nj) => 2 * nj + Bal.Size + 3 + 4;
+
+    public static MotorSpec SpecFor(RagdollDef d, int h1 = 32, int h2 = 32)
+    {
+        int nj = d.Joints.Count;
+        int i = InputSize(nj), o = 2 * nj, s = Protocol.Count;
+        return new MotorSpec(i, h1, h2, o, s, IoHash(d, i, o, s));
+    }
+
+    public static uint IoHash(RagdollDef d, int i, int o, int s)
+    {
+        string str = $"{Format}|{i}|{o}|{s}|{Bal.Size}|" + string.Join(",", d.Joints.Select(j => j.Name));
+        uint h = 2166136261;
+        foreach (char c in str) { h ^= c; h *= 16777619; }
+        return h;
+    }
+
+    public static int ParamCount(MotorSpec s) =>
+        s.H1 * s.In + s.H1 + 2 * s.H1 * s.Sectors + s.H2 * s.H1 + s.H2 + s.Out * s.H2 + s.Out + s.Out * s.Sectors;
+
+    public NeuralMotorChip(MotorSpec s, float[] w)
+    {
+        _count = ParamCount(s);
+        if (w.Length != _count) throw new ArgumentException($"weights {w.Length} != {_count}");
+        Spec = s; W = w;
+        Maturity = new float[s.Sectors];
+        SectorGen = new int[s.Sectors];
+        int k = 0;
+        _oW1 = k; k += s.H1 * s.In;
+        _oB1 = k; k += s.H1;
+        _oE  = k; k += s.H1 * s.Sectors;
+        _oG  = k; k += s.H1 * s.Sectors;
+        _oW2 = k; k += s.H2 * s.H1;
+        _oB2 = k; k += s.H2;
+        _oW3 = k; k += s.Out * s.H2;
+        _oB3 = k; k += s.Out;
+        _oO  = k;
+        _x = new float[s.In]; _h1 = new float[s.H1]; _h2 = new float[s.H2]; _o = new float[s.Out];
+    }
+
+    public NeuralMotorChip CloneWith(float[] w)
+    {
+        var c = new NeuralMotorChip(Spec, w) { Name = Name, Generation = Generation };
+        Array.Copy(Maturity, c.Maturity, Maturity.Length);
+        Array.Copy(SectorGen, c.SectorGen, SectorGen.Length);
+        return c;
+    }
+
+    /// Пустой чип: случайные скрытые слои, нулевые выход и сектора → обмякла
+    public static NeuralMotorChip Blank(RagdollDef d, int seed, int h1 = 32, int h2 = 32)
+    {
+        var s = SpecFor(d, h1, h2);
+        var w = new float[ParamCount(s)];
+        var c = new NeuralMotorChip(s, w) { Name = "BLANK" };
+        var r = new Random(seed);
+        float s1 = 1f / MathF.Sqrt(s.In), s2 = 1f / MathF.Sqrt(s.H1);
+        for (int i = 0; i < s.H1 * s.In; i++) w[c._oW1 + i] = Rng.Gauss(r) * s1;
+        for (int i = 0; i < s.H2 * s.H1; i++) w[c._oW2 + i] = Rng.Gauss(r) * s2;
+        return c;
+    }
+
+    /// Маска обучения: свой сектор — 1, чужие — 0, общие веса — shared
+    public float[] Mask(int sector, float shared)
+    {
+        var m = new float[_count];
+        Array.Fill(m, shared);
+        var s = Spec;
+        for (int h = 0; h < s.H1; h++)
+            for (int q = 0; q < s.Sectors; q++)
+            {
+                float v = q == sector ? 1f : 0f;
+                m[_oE + h * s.Sectors + q] = v;
+                m[_oG + h * s.Sectors + q] = v;
+            }
+        for (int o = 0; o < s.Out; o++)
+            for (int q = 0; q < s.Sectors; q++)
+                m[_oO + o * s.Sectors + q] = q == sector ? 1f : 0f;
+        return m;
+    }
+
+    public void Reset(Brain b)
+    {
+        b.Bus.Channels.TryGetValue("pain.total", out _pain);
+        var joints = b.Body.Def.Joints;
+        int nj = joints.Count;
+        _lo = new float[nj]; _hi = new float[nj];
+        for (int j = 0; j < nj; j++) { _lo[j] = joints[j].Lower; _hi[j] = joints[j].Upper; }
+    }
+
+    public void Tick(Brain b, float dt)
+    {
+        var s = Spec;
+        int nj = s.Out / 2;
+        if (Burnt || _lo == null || nj != b.MotorTarget.Length || s.In != InputSize(nj))
+        {
+            Array.Clear(b.MotorTarget); Array.Clear(b.MotorStiff);
+            return;
+        }
+
+        int k = 0;
+        for (int j = 0; j < nj; j++) _x[k++] = b.Angle[j];
+        for (int j = 0; j < nj; j++) _x[k++] = b.Vel[j];
+        for (int i = 0; i < Bal.Size; i++) _x[k++] = b.Balance[i];
+        for (int i = 0; i < 3; i++) _x[k++] = _pain != null ? _pain[i] : 0f;
+        for (int i = 0; i < 4; i++) _x[k++] = b.Cmd[i];
+
+        var p = b.P;
+        int S = s.Sectors;
+
+        for (int h = 0; h < s.H1; h++)
+        {
+            float a = W[_oB1 + h], g = 1f;
+            int row = _oW1 + h * s.In;
+            for (int i = 0; i < s.In; i++) a += W[row + i] * _x[i];
+            int e = _oE + h * S, gg = _oG + h * S;
+            for (int q = 0; q < S; q++) { a += W[e + q] * p[q]; g += W[gg + q] * p[q]; }
+            _h1[h] = MathF.Tanh(a) * g;
+        }
+        for (int h = 0; h < s.H2; h++)
+        {
+            float a = W[_oB2 + h];
+            int row = _oW2 + h * s.H1;
+            for (int i = 0; i < s.H1; i++) a += W[row + i] * _h1[i];
+            _h2[h] = MathF.Tanh(a);
+        }
+        for (int o = 0; o < s.Out; o++)
+        {
+            float a = W[_oB3 + o];
+            int row = _oW3 + o * s.H2;
+            for (int h = 0; h < s.H2; h++) a += W[row + h] * _h2[h];
+            int oo = _oO + o * S;
+            for (int q = 0; q < S; q++) a += W[oo + q] * p[q];
+            _o[o] = a;
+        }
+
+        for (int j = 0; j < nj; j++)
+        {
+            float t = MathF.Tanh(_o[j]);
+            float tgt = t >= 0f ? t * _hi[j] : -t * _lo[j];
+            float st = 1f / (1f + MathF.Exp(-(_o[nj + j] - StiffBias)));
+            if (!float.IsFinite(tgt) || !float.IsFinite(st))
+            {
+                Burnt = true;
+                Array.Clear(b.MotorTarget); Array.Clear(b.MotorStiff);
+                return;
+            }
+            b.MotorTarget[j] = tgt;
+            b.MotorStiff[j] = st;
+        }
+    }
+}
+```
+
+---
+
+## 9. CREATE `ChipFile.cs`
+
+```csharp
+using Godot;
+using System;
+
+public static class ChipFile
+{
+    public const string MotorPath = "user://chips/motor_nn.chip";
+    const uint Magic = 0x50494843, Version = 2;   // "CHIP"
+
+    public static bool Save(string path, NeuralMotorChip c)
+    {
+        DirAccess.MakeDirRecursiveAbsolute(path.GetBaseDir());
+        string tmp = path + ".tmp";
+        using (var f = FileAccess.Open(tmp, FileAccess.ModeFlags.Write))
+        {
+            if (f == null) { GD.PushError($"Не удалось записать {tmp}: {FileAccess.GetOpenError()}"); return false; }
+            var s = c.Spec;
+            f.Store32(Magic); f.Store32(Version); f.Store32((uint)c.Kind);
+            f.Store32((uint)s.In); f.Store32((uint)s.H1); f.Store32((uint)s.H2);
+            f.Store32((uint)s.Out); f.Store32((uint)s.Sectors); f.Store32(s.IoHash);
+            f.Store32((uint)c.Generation);
+            f.StorePascalString(c.Name);
+            for (int k = 0; k < s.Sectors; k++) { f.StoreFloat(c.Maturity[k]); f.Store32((uint)c.SectorGen[k]); }
+            f.Store32((uint)c.W.Length);
+            foreach (var w in c.W) f.StoreFloat(w);
+        }
+        if (FileAccess.FileExists(path)) DirAccess.RemoveAbsolute(path);
+        return DirAccess.RenameAbsolute(tmp, path) == Error.Ok;
+    }
+
+    /// null — файла нет, формат старый или разъём не подходит к телу
+    public static NeuralMotorChip LoadMotor(string path, RagdollDef def)
+    {
+        if (!FileAccess.FileExists(path)) return null;
+        using var f = FileAccess.Open(path, FileAccess.ModeFlags.Read);
+        if (f == null || f.Get32() != Magic || f.Get32() != Version) return null;
+        if (f.Get32() != (uint)LobeKind.Motor) return null;
+
+        var s = new MotorSpec((int)f.Get32(), (int)f.Get32(), (int)f.Get32(),
+                              (int)f.Get32(), (int)f.Get32(), f.Get32());
+        if (s != NeuralMotorChip.SpecFor(def, s.H1, s.H2))
+        {
+            GD.PushWarning($"{path.GetFile()}: несовместимый разъём");
+            return null;
+        }
+
+        int gen = (int)f.Get32();
+        string name = f.GetPascalString();
+        var mat = new float[s.Sectors];
+        var sg = new int[s.Sectors];
+        for (int k = 0; k < s.Sectors; k++) { mat[k] = f.GetFloat(); sg[k] = (int)f.Get32(); }
+
+        int n = (int)f.Get32();
+        if (n != NeuralMotorChip.ParamCount(s)) return null;
+        var w = new float[n];
+        for (int i = 0; i < n; i++) w[i] = f.GetFloat();
+
+        var c = new NeuralMotorChip(s, w) { Name = name, Generation = gen };
+        Array.Copy(mat, c.Maturity, mat.Length);
+        Array.Copy(sg, c.SectorGen, sg.Length);
+        return c;
+    }
+}
+```
+
+---
+
+## 10. CREATE `DreamJob.cs`
+
+```csharp
+using System;
+
+/// Передача состояния между Main и Dream (статика переживает смену сцены)
+public static class DreamJob
+{
+    public static int Sector = Protocol.Stand;
+    public static string ChipPath = ChipFile.MotorPath;
+    public static DamageSnapshot Damage;
+    public static bool Waking;
+}
+
+/// Слепок травм тела: во сне клоны учатся с ними (режим Frozen)
+public sealed class DamageSnapshot
+{
+    public float[] StopWear, Insulation, Coil;
+    public bool[] HoseTorn, CableCut;
+    public float Coolant;
+    public bool Gyro;
+
+    public static DamageSnapshot Capture(Ragdoll g) => new()
+    {
+        StopWear   = (float[])g.Dur.StopWear.Clone(),
+        Insulation = (float[])g.Dur.Insulation.Clone(),
+        Coil       = (float[])g.Damage.Clone(),
+        HoseTorn   = (bool[])g.Dur.HoseTorn.Clone(),
+        CableCut   = (bool[])g.Dur.CableCut.Clone(),
+        Coolant    = g.Dur.Coolant,
+        Gyro       = g.GyroOn,
+    };
+
+    public void Apply(Ragdoll g)
+    {
+        if (g?.Dur == null || StopWear.Length != g.Dur.StopWear.Length) return;
+        Array.Copy(StopWear, g.Dur.StopWear, StopWear.Length);
+        Array.Copy(Insulation, g.Dur.Insulation, Insulation.Length);
+        Array.Copy(Coil, g.Damage, Coil.Length);
+        Array.Copy(HoseTorn, g.Dur.HoseTorn, HoseTorn.Length);
+        Array.Copy(CableCut, g.Dur.CableCut, CableCut.Length);
+        g.Dur.Coolant = Coolant;
+        g.GyroOn = Gyro;
+    }
+}
+```
+
+---
+
+## 11. CREATE `DreamTasks.cs`
+
+```csharp
+using Godot;
+using System;
+
+public interface IEpisode
+{
+    float Step(float dt, int tick, out bool failed);
+    float Quality { get; }          // 0..1, для зрелости сектора
+}
+
+public interface IDreamTask
+{
+    int Sector { get; }
+    float Seconds { get; }
+    int ExamCount { get; }
+    float FallPenalty { get; }
+    IChip MakeArbiter();
+    IEpisode Begin(Ragdoll g, int seed, int examIndex);   // examIndex < 0 — популяция
+}
+
+public static class DreamTasks
+{
+    public static IDreamTask Make(int sector) => sector switch
+    {
+        Protocol.Stand => new StandTask(),
+        _ => null,
+    };
+}
+
+/// Арбитр, жёстко держащий один сектор (для сна и отладки)
+public sealed class LockArbiter : IChip
+{
+    public readonly int Sector;
+    public LockArbiter(int sector) { Sector = sector; }
+    public LobeKind Kind => LobeKind.Arbiter;
+    public string Label => $"ARB LOCK {Protocol.Names[Sector]}";
+    public void Reset(Brain b) => Set(b);
+    public void Tick(Brain b, float dt) => Set(b);
+    void Set(Brain b) { for (int k = 0; k < Protocol.Count; k++) b.P[k] = k == Sector ? 1f : 0f; }
+}
+
+public static class ArbiterInfo
+{
+    public static string State(Brain b) => b.Slots[(int)LobeKind.Arbiter].Chip switch
+    {
+        ArbiterRom a => a.StateName,
+        LockArbiter l => "LOCK " + Protocol.Names[l.Sector],
+        _ => "заклинило",
+    };
+}
+
+// ───────── STAND: стоять в позе экономно, только ветер, без толчков ─────────
+public sealed class StandTask : IDreamTask
+{
+    public float EpisodeSeconds = 6f;
+    public float WindLevel = 0.03f, WindTau = 0.5f;          // доля веса тела
+    public float Alive = 0.2f, Upright = 0.2f, PoseWeight = 0.6f, PoseSigma = 0.2f;
+    public float EnergyCost = 0.5f, EffortCost = 1.0f, HeatCost = 0.3f, SlideCost = 0.3f;
+    public float DiscomfortCost = 0.1f, PainCost = 0.5f, AcuteCost = 1.5f;
+    public float Fall = 0.5f;
+
+    public int Sector => Protocol.Stand;
+    public float Seconds => EpisodeSeconds;
+    public int ExamCount => 2;                                // 0 — ветер, 1 — штиль
+    public float FallPenalty => Fall;
+    public IChip MakeArbiter() => new LockArbiter(Protocol.Stand);
+    public IEpisode Begin(Ragdoll g, int seed, int examIndex) => new StandEpisode(this, g, seed, examIndex);
+}
+
+sealed class StandEpisode : IEpisode
+{
+    readonly StandTask T;
+    readonly Ragdoll G;
+    readonly Random R;
+    readonly float _amp, _weight, _jwSum;
+    readonly float[] _ref, _jw, _pain;
+    float _wind, _poseSum;
+    int _n;
+
+    public float Quality => _n > 0 ? _poseSum / _n : 0f;
+
+    public StandEpisode(StandTask t, Ragdoll g, int seed, int examIndex)
+    {
+        T = t; G = g; R = new Random(seed);
+        _amp = examIndex switch { 0 => 1f, 1 => 0f, _ => 1.5f * (float)R.NextDouble() };
+        _weight = g.TotalMass * Ragdoll.Gravity;
+
+        int nj = g.Def.Joints.Count;
+        _ref = new float[nj]; _jw = new float[nj];
+        for (int j = 0; j < nj; j++)
+        {
+            string n = g.Def.Joints[j].Name;
+            _ref[j] = MotorRom.Stand(n).Item1;
+            _jw[j] = n.StartsWith("shoulder") || n.StartsWith("elbow") ? 0.3f : n == "neck" ? 0.5f : 1f;
+            _jwSum += _jw[j];
+        }
+        g.Brain.Bus.Channels.TryGetValue("pain.total", out _pain);
+    }
+
+    public float Step(float dt, int tick, out bool failed)
+    {
+        var g = G;
+        float a = dt / T.WindTau;
+        _wind += -a * _wind + MathF.Sqrt(2f * a) * Rng.Gauss(R);
+        var chest = g.Bodies[g.Chest];
+        chest.ApplyCentralForce(new Vector2(_wind * _amp * T.WindLevel * _weight, 0f));
+
+        float hy = -g.Bodies[g.Head].GlobalPosition.Y;
+        float rot = MathF.Abs(g.Tilt(g.Chest));
+        failed = hy < 0.4f * g.HeadHeight0 || rot > 1.2f;
+        if (failed) return 0f;
+
+        float err = 0f;
+        for (int j = 0; j < _ref.Length; j++)
+        {
+            float d = g.Angle[j] - _ref[j];
+            err += _jw[j] * d * d;
+        }
+        err /= _jwSum;
+        float pose = MathF.Exp(-err / (T.PoseSigma * T.PoseSigma));
+        _poseSum += pose; _n++;
+
+        float slide = 0f;
+        if (g.Grounded[g.FootNear]) slide += MathF.Abs(g.Bodies[g.FootNear].LinearVelocity.X);
+        if (g.Grounded[g.FootFar])  slide += MathF.Abs(g.Bodies[g.FootFar].LinearVelocity.X);
+        slide /= 100f;
+
+        float p0 = 0f, p1 = 0f, p2 = 0f;
+        if (_pain != null) { p0 = _pain[0]; p1 = _pain[1]; p2 = _pain[2]; }
+
+        return T.Alive
+             + T.Upright * (1f - rot / 1.2f)
+             + T.PoseWeight * pose
+             - T.EnergyCost * g.Power
+             - T.EffortCost * g.Effort
+             - T.HeatCost * g.Heat
+             - T.SlideCost * slide
+             - T.DiscomfortCost * p0
+             - T.PainCost * p1
+             - T.AcuteCost * p2;
+    }
+}
+```
+
+---
+
+## 12. REPLACE `Dream.cs`
+```csharp
+using Godot;
+using System;
+using System.Collections.Generic;
+
+public partial class Dream : Node2D
+{
+    [Export] public int Pairs = 16;
+    [Export] public int Hidden1 = 32;
+    [Export] public int Hidden2 = 32;
+    [Export] public float Sigma = 0.04f;
+    [Export] public float LearningRate = 0.03f;
+    [Export] public float ReplayShare = 0.25f;
+    [Export] public float MatureThreshold = 0.5f;
+    [Export] public float SharedLock = 2f;
+    [Export] public int MaxGenerations = 0;
+    [Export] public bool UseDamage = true;
+
+    const uint CloneLayer = 1u << 5;
+    static readonly Color Ghost = new(0.55f, 0.75f, 1f, 0.08f);
+    static readonly Color ExamMain = Colors.White;
+    static readonly Color ExamOther = new(1f, 1f, 1f, 0.3f);
+    static readonly Color ReplayColor = new(0.6f, 1f, 0.6f, 0.5f);
+
+    sealed class Run
+    {
+        public Ragdoll G;
+        public IEpisode Ep;
+        public IDreamTask Task;
+        public int Role;              // 0 популяция, 1 экзамен, 2 повторение
+        public bool Alive = true, Fell;
+        public float Fit;
+        public int Ticks, Limit;
+    }
+
+    RagdollDef _def;
+    MotorSpec _spec;
+    NeuralMotorChip _chip;
+    IDreamTask _main;
+    readonly List<IDreamTask> _replay = new();
+    EsOptimizer _es;
+    List<Run> _runs;
+    float[] _theta;
+    int _N, _sector, _tick, _gen, _startGen, _examOk, _examTotal;
+    float _best = float.MinValue, _exam, _examQ, _replayScore, _mean, _shared;
+    bool _headless, _fresh, _failed;
+    string _chipPath;
+    readonly Random _rng = new(7);
+    Label _hud;
+    ulong _rateT0; int _rateTicks; float _rate;
+
+    public override void _Ready()
+    {
+        _headless = DisplayServer.GetName() == "headless";
+        if (_headless) OS.LowProcessorUsageModeSleepUsec = 0;
+        _sector = DreamJob.Sector;
+        _chipPath = DreamJob.ChipPath;
+        ParseArgs();
+
+        var floor = new StaticBody2D
+        {
+            CollisionLayer = 1, CollisionMask = 0,
+            PhysicsMaterialOverride = new PhysicsMaterial { Friction = 1f }
+        };
+        floor.AddChild(new CollisionShape2D { Shape = new WorldBoundaryShape2D() });
+        AddChild(floor);
+
+        if (!_headless)
+        {
+            RenderingServer.SetDefaultClearColor(new Color(0.05f, 0.05f, 0.09f));
+            var cam = new Camera2D { Zoom = new Vector2(2.5f, 2.5f), Position = new Vector2(0, -90) };
+            AddChild(cam); cam.MakeCurrent();
+            var ui = new CanvasLayer();
+            _hud = new Label { Position = new Vector2(12, 10) };
+            ui.AddChild(_hud); AddChild(ui);
+        }
+
+        _def = RagdollDef.Girl();
+        _spec = NeuralMotorChip.SpecFor(_def, Hidden1, Hidden2);
+
+        _chip = _fresh ? null : ChipFile.LoadMotor(_chipPath, _def);
+        if (_chip != null && _chip.Spec != _spec) _chip = null;
+        if (_chip == null)
+        {
+            _chip = NeuralMotorChip.Blank(_def, 1, Hidden1, Hidden2);
+            _chip.Name = "MOTOR NN";
+            GD.Print($"Пустой чип, {_chip.W.Length} параметров");
+        }
+        else GD.Print($"Продолжаю: {_chip.Label}");
+        _gen = _startGen = _chip.Generation;
+
+        _main = DreamTasks.Make(_sector);
+        if (_main == null)
+        {
+            _failed = true;
+            GD.PushError($"Нет учебной программы для сектора {Protocol.Names[_sector]}");
+            if (_headless) GetTree().Quit(1);
+            return;
+        }
+
+        float other = 0f;
+        for (int k = 0; k < Protocol.Count; k++)
+        {
+            if (k == _sector) continue;
+            other += _chip.Maturity[k];
+            if (_chip.Maturity[k] >= MatureThreshold && DreamTasks.Make(k) is { } t) _replay.Add(t);
+        }
+        _shared = 1f / (1f + SharedLock * other);
+        _es = new EsOptimizer(_chip.W, Pairs, Sigma, LearningRate, seed: 1) { Scale = _chip.Mask(_sector, _shared) };
+
+        GD.Print($"Сектор {Protocol.Names[_sector]}, общие веса x{_shared:F2}, повторение: {_replay.Count}, " +
+                 $"травмы: {(UseDamage && DreamJob.Damage != null ? "да (Frozen)" : "нет")}");
+        GD.Print($"Сохраняю в {ProjectSettings.GlobalizePath(_chipPath)}");
+        StartGeneration();
+    }
+
+    void ParseArgs()
+    {
+        var a = OS.GetCmdlineUserArgs();
+        for (int i = 0; i < a.Length; i++)
+        {
+            switch (a[i])
+            {
+                case "--gens":
+                    if (i + 1 < a.Length) MaxGenerations = a[++i].ToInt();
+                    break;
+                case "--sector":
+                    if (i + 1 < a.Length)
+                    {
+                        int s = Array.IndexOf(Protocol.Names, a[++i].ToUpper());
+                        if (s >= 0) _sector = s; else GD.PushError($"Неизвестный сектор {a[i]}");
+                    }
+                    break;
+                case "--chip":
+                    if (i + 1 < a.Length) _chipPath = a[++i];
+                    break;
+                case "--fresh": _fresh = true; break;
+                case "--pristine": UseDamage = false; break;
+            }
+        }
+    }
+
+    void StartGeneration()
+    {
+        if (_runs != null) foreach (var r in _runs) if (IsInstanceValid(r.G)) r.G.QueueFree();
+        _runs = new List<Run>();
+
+        var pop = _es.Ask();
+        _N = pop.Length;
+        for (int p = 0; p < _N / 2; p++)
+        {
+            int seed = _rng.Next();
+            var task = _replay.Count > 0 && _rng.NextDouble() < ReplayShare ? _replay[_rng.Next(_replay.Count)] : _main;
+            _runs.Add(MakeRun(pop[2 * p], task, seed, -1, 0));
+            _runs.Add(MakeRun(pop[2 * p + 1], task, seed, -1, 0));
+        }
+
+        _theta = (float[])_es.Theta.Clone();
+        for (int e = 0; e < _main.ExamCount; e++) _runs.Add(MakeRun(_theta, _main, 1000 + e, e, 1));
+        foreach (var t in _replay) _runs.Add(MakeRun(_theta, t, 2000, 0, 2));
+        _tick = 0;
+    }
+
+    Run MakeRun(float[] w, IDreamTask task, int seed, int examIdx, int role)
+    {
+        var g = new Ragdoll { Position = new Vector2(0, -1f) };
+        AddChild(g);
+        g.Build(_def, 0);
+        var r = new Run
+        {
+            G = g, Task = task, Role = role,
+            Limit = Math.Max(1, (int)(task.Seconds * Engine.PhysicsTicksPerSecond)),
+        };
+        if (g.Broken) { r.Alive = false; r.Fell = true; return r; }
+
+        foreach (var ch in g.GetChildren()) if (ch is DebugOverlay || ch is DamageFx) ch.QueueFree();
+        foreach (var b in g.Bodies) { b.CollisionLayer = CloneLayer; b.CollisionMask = 1; }
+
+        if (UseDamage && DreamJob.Damage != null) { g.Dur.Mode = DamageMode.Frozen; DreamJob.Damage.Apply(g); }
+        else g.Dur.Mode = DamageMode.Off;
+
+        var br = g.Brain;
+        br.Insert(FirmwareRom.Stock(), true);
+        br.Insert(VestibularRom.Stock(), true);
+        br.Insert(ReflexRom.Stock(), true);
+        br.Insert(task.MakeArbiter(), true);
+        br.Insert(new NeuralMotorChip(_spec, w), true);
+
+        g.Modulate = role == 0 ? Ghost : role == 2 ? ReplayColor : examIdx == 0 ? ExamMain : ExamOther;
+        g.ZIndex = role == 0 ? 0 : role == 1 && examIdx == 0 ? 10 : 5;
+        r.Ep = task.Begin(g, seed, examIdx);
+        return r;
+    }
+
+    public override void _PhysicsProcess(double delta)
+    {
+        if (_failed || _runs == null) return;
+        CountRate();
+        float dt = (float)delta;
+
+        int alive = 0;
+        foreach (var r in _runs)
+        {
+            if (!r.Alive) continue;
+            if (r.G.Broken) { Fail(r); continue; }
+            float rew = r.Ep.Step(dt, _tick, out bool failed);
+            if (failed) { Fail(r); continue; }
+            r.Fit += rew;
+            if (++r.Ticks >= r.Limit) { r.Alive = false; continue; }
+            alive++;
+        }
+
+        _tick++;
+        if (alive == 0) EndGeneration();
+    }
+
+    void Fail(Run r)
+    {
+        r.Alive = false;
+        r.Fell = true;
+        r.Fit -= r.Task.FallPenalty * (r.Limit - r.Ticks);   // ранний провал хуже позднего
+        if (r.Role == 1 && IsInstanceValid(r.G)) r.G.Modulate = new Color(1f, 0.5f, 0.5f, r.G.Modulate.A);
+    }
+
+    void EndGeneration()
+    {
+        var fit = new float[_N];
+        float mean = 0f;
+        for (int i = 0; i < _N; i++) { fit[i] = _runs[i].Fit / _runs[i].Limit; mean += fit[i]; }
+        _mean = mean / _N;
+
+        _exam = 0f; _examQ = 0f; _examOk = 0; _examTotal = 0; _replayScore = 0f;
+        int nr = 0;
+        for (int i = _N; i < _runs.Count; i++)
+        {
+            var r = _runs[i];
+            float f = r.Fit / r.Limit;
+            if (r.Role == 1)
+            {
+                _exam += f;
+                _examQ += r.Ep?.Quality ?? 0f;
+                _examTotal++;
+                if (!r.Fell) _examOk++;
+            }
+            else { _replayScore += f; nr++; }
+        }
+        _exam /= Math.Max(_examTotal, 1);
+        _examQ /= Math.Max(_examTotal, 1);
+        if (nr > 0) _replayScore /= nr;
+
+        _es.Tell(fit);
+        _gen++;
+
+        float score = _exam + (nr > 0 ? 0.5f * _replayScore : 0f);
+        string saved = "";
+        if (score > _best)
+        {
+            _best = score;
+            var c = _chip.CloneWith((float[])_theta.Clone());
+            c.Name = "MOTOR NN";
+            c.Generation = _gen;
+            c.Maturity[_sector] = _examQ * _examOk / Math.Max(_examTotal, 1);
+            c.SectorGen[_sector] = _chip.SectorGen[_sector] + (_gen - _startGen);
+            if (ChipFile.Save(_chipPath, c)) saved = "  ★";
+        }
+
+        GD.Print($"gen {_gen,4}  {Protocol.Names[_sector]}  exam {_exam:F3} ({_examOk}/{_examTotal}) pose {_examQ:P0}" +
+                 (nr > 0 ? $"  replay {_replayScore:F3}" : "") +
+                 $"  mean {_mean:F3}  best {_best:F3}  {_rate:F0} t/s{saved}");
+
+        if (_headless && MaxGenerations > 0 && _gen - _startGen >= MaxGenerations) { GetTree().Quit(); return; }
+        StartGeneration();
+    }
+
+    void CountRate()
+    {
+        _rateTicks++;
+        ulong now = Time.GetTicksMsec();
+        if (now - _rateT0 >= 1000)
+        {
+            _rate = _rateTicks * 1000f / (now - _rateT0);
+            _rateTicks = 0; _rateT0 = now;
+        }
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_hud == null) return;
+        if (_failed) { _hud.Text = "Нет учебной программы для этого сектора\n[Esc] проснуться"; return; }
+        int ep = Math.Max(1, (int)(_main.Seconds * Engine.PhysicsTicksPerSecond));
+        _hud.Text =
+            $"СОН · сектор {Protocol.Names[_sector]}\n" +
+            $"Поколение: {_gen}   Эпизод: {Math.Min(100, _tick * 100 / ep)}%\n" +
+            $"Экзамен: {_exam:F3}   устояла {_examOk}/{_examTotal}   поза {_examQ:P0}\n" +
+            (_replay.Count > 0 ? $"Повторение старых секторов: {_replayScore:F3}\n" : "") +
+            $"Среднее популяции: {_mean:F3}   Лучший: {_best:F3}\n" +
+            $"Общие веса x{_shared:F2}   Травмы: {(UseDamage && DreamJob.Damage != null ? "заморожены" : "нет")}\n" +
+            $"Скорость: {_rate / Engine.PhysicsTicksPerSecond:F1}×\n\n" +
+            "Белая — экзамен с ветром, бледная — штиль\n" +
+            "[Esc] проснуться (лучший чип сохранён)";
+    }
+
+    public override void _UnhandledInput(InputEvent e)
+    {
+        if (e is InputEventKey { Pressed: true, Echo: false, Keycode: Key.Escape })
+        {
+            DreamJob.Waking = true;
+            GetTree().ChangeSceneToFile("res://Main.tscn");
+        }
+    }
+}
+```
+
+## 13. EDIT `Main.cs`
+
+### 13a. Якорь
+```csharp
+        _variants[LobeKind.Arbiter]    = new Func<IChip>[] { () => new ArbiterRom() };
+        _variants[LobeKind.Motor]      = new Func<IChip>[] { () => new MotorRom() };
+```
+Замена:
+```csharp
+        _variants[LobeKind.Arbiter]    = new Func<IChip>[] { () => new ArbiterRom(), () => new LockArbiter(Protocol.Stand) };
+        _variants[LobeKind.Motor]      = new Func<IChip>[] { () => new MotorRom(), LoadTrainedMotor, () => NeuralMotorChip.Blank(_def, 1) };
+```
+
+### 13b. Якорь
+```csharp
+    void Say(string m) { _panel.Message = m; _panel.MessageTime = 3f; }
+```
+Замена:
+```csharp
+    void Say(string m) { _panel.Message = m; _panel.MessageTime = 3f; }
+
+    IChip LoadTrainedMotor()
+    {
+        var c = ChipFile.LoadMotor(ChipFile.MotorPath, _def);
+        if (c != null) return c;
+        var blank = NeuralMotorChip.Blank(_def, 1);
+        blank.Name = "BLANK (нет файла)";
+        return blank;
+    }
+```
+
+### 13c. Якорь
+```csharp
+        foreach (var k in BrainPanel.Order)
+            _girl.Brain.Insert(_variants[k][_variantIdx[k]](), instant: true);
+```
+Замена:
+```csharp
+        bool waking = DreamJob.Waking;
+        if (waking) { DreamJob.Waking = false; _variantIdx[LobeKind.Motor] = 1; }
+
+        foreach (var k in BrainPanel.Order)
+            _girl.Brain.Insert(_variants[k][_variantIdx[k]](), instant: true);
+
+        if (waking)
+        {
+            DreamJob.Damage?.Apply(_girl);
+            Say($"Проснулась: {_girl.Brain.Slots[(int)LobeKind.Motor].Chip?.Label}");
+        }
+```
+
+### 13d. Якорь
+```csharp
+                case Key.R: Spawn(); break;
+```
+Замена:
+```csharp
+                case Key.R: Spawn(); break;
+                case Key.T:
+                    DreamJob.Sector = Protocol.Stand;
+                    DreamJob.ChipPath = ChipFile.MotorPath;
+                    DreamJob.Damage = _girl != null && !_girl.Broken && _girl.Dur != null ? DamageSnapshot.Capture(_girl) : null;
+                    GetTree().ChangeSceneToFile("res://Dream.tscn");
+                    break;
+```
+
+## 14. EDIT `BrainPanel.cs`
+
+### 14a. Якорь
+```csharp
+        DrawRect(new Rect2(0, 0, 470, 680), new Color(0.02f, 0.03f, 0.05f, 0.7f));
+```
+Замена:
+```csharp
+        DrawRect(new Rect2(0, 0, 470, 700), new Color(0.02f, 0.03f, 0.05f, 0.7f));
+```
+
+### 14b. Якорь
+```csharp
+        y += 16; Text(10, y, "[K] режим износа  [J] состарить упоры  [H] полный ремонт  [R] заново", Dim, 11);
+```
+Замена:
+```csharp
+        y += 16; Text(10, y, "[K] режим износа  [J] состарить упоры  [H] полный ремонт  [R] заново", Dim, 11);
+        y += 16; Text(10, y, "[T] сон: обучение сектора STAND   (во сне [Esc] — проснуться)", Dim, 11);
+```
+
+## 15. Проверка
+
+1. Выполни `dotnet build` в корне проекта. Ожидается 0 ошибок. Предупреждения допустимы, перечисли их количество.
+2. Каждая из команд ниже должна давать **0 совпадений**:
+   - `grep -rnw "NeuralChip\|PostureChip\|StandPath" --include=*.cs .`
+   - `grep -rn "\.Pain\[" --include=*.cs .`
+   - `grep -rn '"pain"' --include=*.cs .`
+   - `grep -rn "Chip is ArbiterRom a ? a.StateName" --include=*.cs .`
+3. Проверь, что существуют `res://Dream.tscn` с `script = ExtResource(...)`, указывающим на `res://Dream.cs`, и `res://Main.tscn`.
+4. Необязательно, только если `godot` или `godot-mono` есть в PATH: `godot --headless --path . res://Dream.tscn -- --gens 2 --pristine --fresh`. В выводе должны быть две строки `gen`, а исключений быть не должно.
+
+## Отчёт
+
+```
+ОПЕРАЦИИ:
+  <номер раздела> <файл> <CREATE|REPLACE|EDIT> OK|FAIL <причина при FAIL>
+ПЕРЕНЕСЕНО В ../archive: <список или "ничего">
+BUILD: OK|FAIL, ошибок N, предупреждений M
+  <первые 10 ошибок дословно при FAIL>
+GREP: <для каждой команды: число совпадений>
+HEADLESS: <пропущено | вывод строк gen | текст исключения>
+ОТКЛОНЕНИЯ ОТ ЗАДАНИЯ: <список или "нет">
+```

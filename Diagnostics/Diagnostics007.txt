@@ -1,0 +1,81 @@
+I’ll read Fix011 and check its specified anchor against the current files before applying the requested changes.
+
+Read , lines 1 to 87
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix011.txt",
+  "view_range": [
+    1,
+    87
+  ]
+}
+
+Search for `AnkleEngageTau|AnkleReleaseTau|_ank\[a\]|_air\[a\]|SwingKnee|SwingTime|Ground...`
+
+Read , lines 125 to 260
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RomChips.cs",
+  "view_range": [
+    125,
+    260
+  ]
+}
+
+Search for `interface IExamVerdict|class RecoverEpisode|tick >= _lastTick|if \(!r.Fell\) ...`
+
+Find files matching `Diagnostics/*`
+
+Read , lines 1 to 180
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Dream.cs",
+  "view_range": [
+    1,
+    180
+  ]
+}
+
+Read , lines 285 to 395
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Dream.cs",
+  "view_range": [
+    285,
+    395
+  ]
+}
+
+Read , lines 1 to 22
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    1,
+    22
+  ]
+}
+
+Read , lines 215 to 255
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    215,
+    255
+  ]
+}
+
+Read , lines 425 to 475
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    425,
+    475
+  ]
+}
+
+**Stopped without changes.** Fix011 requires stopping if an anchor differs beyond whitespace or comments. Its ankle-filter anchor expects the timestep expression inline, but `RomChips.cs` currently assigns it to `tau` first and clamps the denominator:
+
+```csharp
+float tau = on ? AnkleEngageTau : AnkleReleaseTau;
+float k = Math.Min(1f, dt / Math.Max(tau, 1e-6f));
+_ank[a] += ((on ? off : 0f) - _ank[a]) * k;
+b.ReflexTarget[a] += _ank[a];
+```
+
+That is a logic difference from the specified anchor, so I did not proceed with any Fix011 changes.

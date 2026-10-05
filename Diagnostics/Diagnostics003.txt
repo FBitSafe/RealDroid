@@ -1,0 +1,69 @@
+I’ll read the Fix007 instructions and check each specified anchor before editing; if a required anchor is missing, I’ll stop rather than infer the intended change.
+
+Read , lines 1 to 95
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix007.txt",
+  "view_range": [
+    1,
+    95
+  ]
+}
+
+Read , lines 96 to 178
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix007.txt",
+  "view_range": [
+    96,
+    178
+  ]
+}
+
+Search for `<<<|Anchor|Заменить|Создать|DreamLog|XiOutside|ExamCount|FootMarginCost|Recov...`
+
+Search for `\.Level\b`
+
+Read , lines 55 to 122
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix007.txt",
+  "view_range": [
+    55,
+    122
+  ]
+}
+
+Read , lines 123 to 178
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix007.txt",
+  "view_range": [
+    123,
+    178
+  ]
+}
+
+Search for `_runs.Add\(MakeRun\(pop|int seed =|Begin\(g, seed|Tell\(|Rank|rank|_pushTick|...`
+
+Read , lines 213 to 440
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    213,
+    440
+  ]
+}
+
+**Stopped without changes**, as Fix007 requires if an exact anchor is missing.
+
+The step 7 anchor in `Fix007.txt` does not match `RomChips.cs`. It expects:
+
+```csharp
+foreach (int a in body.Ankles) b.ReflexTarget[a] += off;
+```
+
+The current code already has a swinging-leg guard:
+
+```csharp
+foreach (int a in body.Ankles)
+    if (!DoNotTouchSwingingLeg || !b.SwingingJoints[a]) b.ReflexTarget[a] += off;
+```
+
+Per the instructions, I did not make a partial change. The `RecoverTask.Level` references outside `DreamTasks.cs` are in `Dream.cs`: the level override assignment and the ROM-test log. There is also `n.Level(j)` in `BrainPanel.cs`, which is a different API, not `RecoverTask.Level`.

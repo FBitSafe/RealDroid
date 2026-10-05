@@ -1,0 +1,201 @@
+I’ll inspect Fix009 and verify its preconditions and exact anchors first. If it specifies stop-on-missing-anchor behavior, I’ll follow that before editing.
+
+Read , lines 1 to 100
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix009.txt",
+  "view_range": [
+    1,
+    100
+  ]
+}
+
+Read , lines 101 to 197
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix009.txt",
+  "view_range": [
+    101,
+    197
+  ]
+}
+
+Search for `LevelFwd|LevelBack|ExamN|ExamFail|ExamBegun|ExamFailed|_pushTick2|FootOf|Foot...`
+
+Read , lines 1 to 75
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix009.txt",
+  "view_range": [
+    1,
+    75
+  ]
+}
+
+Read , lines 76 to 145
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix009.txt",
+  "view_range": [
+    76,
+    145
+  ]
+}
+
+Read , lines 146 to 205
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix009.txt",
+  "view_range": [
+    146,
+    205
+  ]
+}
+
+Read , lines 228 to 281
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RomChips.cs",
+  "view_range": [
+    228,
+    281
+  ]
+}
+
+Read , lines 210 to 455
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    210,
+    455
+  ]
+}
+
+Search for `pain\.acute|Acute|acute|Bus\.Add\("pain`
+
+The Fix009 prerequisites and requested anchors are present, including the existing explicit RECOVER→STAND transition. I’m proceeding with the dwell-and-settle exit condition, force-entry support, outcome-window scoring, and per-joint acute-pain logging.
+
+Edit , 
+
+Edit 
+
+Ran terminal command: dotnet build "New Game Project.csproj" --no-restore
+
+Read , lines 228 to 290
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RomChips.cs",
+  "view_range": [
+    228,
+    290
+  ]
+}
+
+Read , lines 210 to 475
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    210,
+    475
+  ]
+}
+
+Search for `public const int PelvisTilt|public const float RefHeight|const float H = Ragd...`
+
+Checked , , no problems found
+
+Read , lines 385 to 465
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    385,
+    465
+  ]
+}
+
+Read , lines 465 to 520
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    465,
+    520
+  ]
+}
+
+Read , lines 235 to 285
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RomChips.cs",
+  "view_range": [
+    235,
+    285
+  ]
+}
+
+Search for `_wasRecover|_acutePeak|pain\.acute|PoseDelay|CheckWindow|InCheckWindow|ForceR...`
+
+Implemented Fix009 in `DreamTasks.cs` and `RomChips.cs`. **Build succeeded with 0 warnings and 0 errors.**
+
+Recover rewards now ramp in after a push, while the return bonus is awarded during the check windows only if the arbiter is in `Stand`, both feet are settled within the configured spread, ξ is within the foot interval, and center-of-mass speed is low. Training pushes can force the arbiter into `Recover`. The arbiter’s normal `Recover`→`Stand` transition now requires its existing margin and minimum-time conditions, plus both feet grounded, feet within the spread limit, low speed, and 0.3 seconds continuously settled. Other state transitions are unchanged.
+
+Exam 2/3 receive the requested preliminary push. Exam diagnostics now report the peak acute-pain joint and its time, using the existing per-joint `pain.acute` channel.
+
+### Step 0: ArbiterRom
+
+`State` remains:
+
+```csharp
+public int State { get; private set; }
+```
+
+`Tick` after the change:
+
+```csharp
+public void Tick(Brain b, float dt)
+{
+    var bl = b.Balance;
+    bool lying = bl[Bal.Lying] > 0.5f;
+    float m = bl[Bal.Margin];
+    _timer += dt;
+
+    if (State != Protocol.Stand || _startupTime >= StartupStandTime)
+    {
+        switch (State)
+        {
+            case Protocol.Stand:
+                if (lying) Go(Protocol.Getup);
+                else if (m < 0f) Go(Protocol.Recover);
+                break;
+            case Protocol.Recover:
+                if (lying) Go(Protocol.Getup);
+                else
+                {
+                    var body = b.Body;
+                    float spread = MathF.Abs(body.Bodies[body.FootNear].GlobalPosition.X -
+                                            body.Bodies[body.FootFar].GlobalPosition.X);
+                    bool settled = m > ExitMargin && _timer > MinRecover
+                                && bl[Bal.GroundN] > 0.5f && bl[Bal.GroundF] > 0.5f
+                                && spread <= ExitSpread && MathF.Abs(bl[Bal.ComVx]) <= ExitVel;
+                    _exitDwell = settled ? _exitDwell + dt : 0f;
+                    if (_exitDwell >= ExitDwell) Go(Protocol.Stand);
+                }
+                break;
+            case Protocol.Getup:
+                if (lying) _timer = 0f;
+                else if (_timer > GetupCalm) Go(Protocol.Stand);
+                break;
+        }
+    }
+
+    _startupTime += dt;
+    float a = Math.Min(1f, dt / BlendTime);
+    for (int k = 0; k < Protocol.Count; k++)
+        b.P[k] += ((k == State ? 1f : 0f) - b.P[k]) * a;
+}
+```
+
+Before, the `Recover` case exited with `else if (m > ExitMargin && _timer > MinRecover) Go(Protocol.Stand);`. It now accumulates `_exitDwell` only while all settling conditions hold; breaking any condition resets the dwell timer.
+
+Added:
+
+```csharp
+public void Force(int protocol) => Go(protocol);
+```
+
+`Go` changes `State` and resets `_timer` and `_exitDwell`; the normal `Tick` blending still applies to `b.P`.
+
+`Bal.ComVx` is COM velocity in **pixels/second divided by `H`**; `H = Ragdoll.RefHeight = 100 px`. Therefore the arbiter’s `ExitVel = 0.15` corresponds to 15 px/s.
+
+**Step 8:** implemented. The episode reads per-joint acute values from `pain.acute`, records the greatest value above 0.05 and its joint/time, and includes it in the exam log. That bus channel is created from the `Nociception.Acute` array with one entry per joint.

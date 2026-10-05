@@ -1,0 +1,224 @@
+Fix013 — endurance probe
+Date: 2026-10-05
+
+1. Source reconnaissance
+
+a) StandTask (DreamTasks.cs):
+
+    public float EpisodeSeconds = 6f;
+    public float WindLevel = 0.03f, WindTau = 0.5f;
+    public float Alive = 0.2f, Upright = 0.2f, PoseWeight = 1f, PoseSigma = 0.2f;
+    public float EnergyCost = 0.5f, EffortCost = 1.0f, HeatCost = 0.3f, SlideCost = 0.3f;
+    public float DiscomfortCost = 0.1f, PainCost = 0.5f, AcuteCost = 1.5f;
+    public float Fall = 0.5f;
+
+    public float Seconds => EpisodeSeconds;
+    public int ExamCount => 2; // 0 — ветер, 1 — штиль
+    public IEpisode Begin(Ragdoll g, int seed, int examIndex) =>
+        new StandEpisode(this, g, seed, examIndex);
+
+`StandEpisode` sets `_amp` to 1 for exam 0 and 0 for exam 1; its `Step`
+applies chest force from its filtered random wind. The probe sets
+EpisodeSeconds to the requested duration and starts exam 1 with seed 13013,
+so it runs one quiet Stand episode without perturbation. The probe computes
+pose with the same weighted squared-angle error/exponential formula as
+RecoverEpisode, using RecoverTask's default PoseSigma (0.25).
+
+b) Ragdoll thermal/current data:
+
+    [Export] public float Ambient = 25f;
+    public float[] CurrentCmd, Current, Torque, Temp, Damage;
+    public float Power, Heat, Effort;
+    public float Resistance(int j) =>
+        (1f + Alpha * (Temp[j] - Ambient)) *
+        (1f + (Dur != null && Dur.Effects ? Damage[j] : 0f));
+
+`Temp[j]` stores per-joint coil temperatures, initialized to Ambient during
+Build. `DriveCoils` computes `iAvail = SupplyVoltage / Resistance(j)` and
+`q = i * i * r`; it updates coil temperature from q and cooling. It does not
+expose an i_max field. The probe reports the minimum available-current ratio
+`iAvail / SupplyVoltage`, equivalent to `1 / Resistance(j)` at each joint,
+along with the joint name. This is the coil/supply availability ratio; the
+firmware's separate command clamp remains in effect.
+
+The existing aggregate is calculated in DriveCoils as:
+
+    power += Math.Abs(tau * AngVel[j]);
+    heat += q;
+    ...
+    Power = power / Mgh;
+    Heat = heat / _jp.Length;
+
+Thus `g.Heat` is mean coil loss q (i squared times resistance), not temperature.
+
+c) Dream.cs command-line parsing:
+
+    var a = OS.GetCmdlineUserArgs();
+    for (int i = 0; i < a.Length; i++)
+    {
+        switch (a[i])
+        {
+            case "--gens":
+                if (i + 1 < a.Length) MaxGenerations = a[++i].ToInt();
+                break;
+            case "--sector":
+                ...
+            case "--chip":
+                if (i + 1 < a.Length) _chipPath = a[++i];
+                break;
+        }
+    }
+
+The existing `--gens`, `--sector`, and `--chip` handling remains. Added
+`--probe SECONDS`, `--motor rom|nn`, and `--wear off|live` parsing with
+validation. Probe mode branches before loading/creating training weights or
+constructing the optimizer. NN mode reads the requested chip but never saves
+it. The probe constructs one new ragdoll without applying DreamJob.Damage;
+wear off selects DamageMode.Off and wear live selects DamageMode.Live.
+
+2. Probe output and launch
+
+The probe logs a sample every two seconds, a fall sample when the
+RecoverEpisode head-height/torso-tilt criterion is reached, then `probe END`
+and exits. Per-joint Tmax and minimum available-current ratio include the
+joint name. Balance fields come from Brain.Balance; comX, xi, and margin are
+vestibular outputs normalized by H. Fields unavailable in an invalid body
+state are printed as n/a.
+
+ROM, wear disabled:
+    godot --path "C:\Users\fbits\OneDrive\Documents\new-game-project" -- --probe 60 --motor rom --wear off
+
+ROM, live wear:
+    godot --path "C:\Users\fbits\OneDrive\Documents\new-game-project" -- --probe 60 --motor rom --wear live
+
+NN chip, live wear (replace the path as needed):
+    godot --path "C:\Users\fbits\OneDrive\Documents\new-game-project" -- --probe 60 --motor nn --wear live --chip "user://chips/motor_nn.chip"
+
+Validation:
+    dotnet build "New Game Project.csproj" --no-restore
+    Build succeeded; 0 warnings, 0 errors.
+    Problems check: no errors in Dream.cs.
+
+Godot was not available as a command in this environment, so the probe could
+not be run in-engine here.
+
+Follow-up: gyro comparison
+Dream.MakeRun and Main.Spawn leave Ragdoll.GyroOn at its default true.
+The probe originally forced it off, despite the NN being trained with the
+gyro-enabled setup. Added optional `--gyro on|off`; it defaults to off to
+preserve Fix013 behavior. Use `--gyro on` for a manual-game-like comparison:
+
+    godot --path "C:\Users\fbits\OneDrive\Documents\new-game-project" "res://Dream.tscn" -- --probe 60 --motor nn --wear live --gyro on --chip "user://chips/motor_nn.chip"
+
+
+---
+
+
+probe START seconds=60 motor=rom wear=off gyro=off pristine=yes
+probe t=2.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.002 xi=+0.005 margin=0.12 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=4.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=6.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=8.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=10.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=12.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=14.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=16.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_n) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=18.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=20.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=22.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=24.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=26.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=28.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=30.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=32.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=34.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=36.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=38.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=40.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=42.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=44.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=46.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=48.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=50.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=52.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=54.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=56.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=58.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe END t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px reason=time
+
+
+
+---
+
+
+probe START seconds=60 motor=rom wear=live gyro=off pristine=yes
+probe t=2.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.002 xi=+0.005 margin=0.12 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=4.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=6.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=8.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=10.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=12.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=14.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=16.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_n) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=18.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=20.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=22.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=24.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=26.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=28.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=30.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=32.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=34.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=36.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=38.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=40.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=42.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=44.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=46.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=48.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=50.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=52.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=54.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=56.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=58.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_f) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px
+probe END t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=+0.004 xi=+0.004 margin=0.13 поза=0.98 Tmax=25.0(elbow_n) imax=1.00(elbow_f) heat=0.00 power=0.00 stiffMean=0.75 spread=0px reason=time
+
+
+
+---
+
+
+probe START seconds=60 motor=nn chip=MOTOR NN generation=467 standMaturity=0.610 nonzeroWeights=3630/4170 path=C:/Users/fbits/AppData/Roaming/Godot/app_userdata/RealAndroid/chips/motor_nn.chip wear=live gyro=on pristine=yes
+probe t=2.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.029 xi=-0.025 margin=0.10 поза=0.70 Tmax=25.0(neck) imax=1.00(neck) heat=0.00 power=0.01 stiffMean=0.32 spread=0px
+probe t=4.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.022 xi=-0.022 margin=0.11 поза=0.76 Tmax=25.0(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.33 spread=0px
+probe t=6.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.023 xi=-0.022 margin=0.11 поза=0.77 Tmax=25.0(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.33 spread=0px
+probe t=8.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.022 xi=-0.022 margin=0.11 поза=0.77 Tmax=25.0(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=10.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.0(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=12.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.0(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=14.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=16.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=18.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=20.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=22.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=24.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=26.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=28.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=30.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=32.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=34.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=36.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=38.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=40.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=42.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=44.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=46.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=48.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=50.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=52.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=54.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=56.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=58.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px
+probe END t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.021 xi=-0.021 margin=0.11 поза=0.77 Tmax=25.1(lumbar) imax=1.00(lumbar) heat=0.00 power=0.00 stiffMean=0.34 spread=0px reason=time

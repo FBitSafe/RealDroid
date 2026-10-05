@@ -1,0 +1,180 @@
+I’ll inspect Fix010’s instructions and check its required anchors and prerequisites in the current project before making any changes.
+
+Read , lines 1 to 90
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix010.txt",
+  "view_range": [
+    1,
+    90
+  ]
+}
+
+Read , lines 91 to 150
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix010.txt",
+  "view_range": [
+    91,
+    150
+  ]
+}
+
+Search for `ExitDwell|ExitSpread|ExitVel|_exitDwell|_timer > MinRecover|_pushTick2|InChec...`
+
+Search for `Force\(|Protocol\.Recover|Set\(.*Recover|_timer|GetupCalm`
+
+Search for `GuardThreshold =|float f = Math.Min\(1f, GuardFreeze|GuardStiff \* x|FlinchIn...`
+
+Search for `float inh = Math.Clamp\(ReflexInhibit|Target\[j\] = MotorTarget\[j\]|Stiff\[j...`
+
+Search for `Key\.L|Key\.K|Key\.H|case Key\.`
+
+Search for `ForceShare =|if \(examIndex >= 2\)|_imp2 =|_force =|bool _failRec|_lastPushTi...`
+
+Read , lines 160 to 205
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Main.cs",
+  "view_range": [
+    160,
+    205
+  ]
+}
+
+Read , lines 60 to 69
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RagdollDef.cs",
+  "view_range": [
+    60,
+    69
+  ]
+}
+
+Edit , , , 
+
+Read , lines 120 to 235
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RomChips.cs",
+  "view_range": [
+    120,
+    235
+  ]
+}
+
+Read , lines 270 to 360
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    270,
+    360
+  ]
+}
+
+Read , lines 390 to 510
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    390,
+    510
+  ]
+}
+
+Read , lines 50 to 100
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Brain.cs",
+  "view_range": [
+    50,
+    100
+  ]
+}
+
+Search for `толчок \{_imp / T.PushMax`
+
+Edit , 
+
+Ran terminal command: dotnet build "New Game Project.csproj" --no-restore
+
+Search for `GuardRecoverRelief|AnkleEngageTau|AnkleReleaseTau|SwingKnee|KneeOf|float reli...`
+
+Read , lines 61 to 67
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RagdollDef.cs",
+  "view_range": [
+    61,
+    67
+  ]
+}
+
+Checked , , , , no problems found
+
+Implemented Fix010 across `RomChips.cs`, `Brain.cs`, `DreamTasks.cs`, and `Main.cs`.
+
+- Ankle reflex now ramps on smoothly for a grounded support foot and releases faster when it lifts or loses support.
+- The reflex flexes the knee during the first 0.3 seconds of foot swing; matching knee joints are cached by ankle joint.
+- Acute-pain guarding is reduced in proportion to Recover activation.
+- Getup is limp by default; **L** toggles GETUP on/off and prints its state.
+- Training force-entry share is 0.8; Recover exams force the arbiter into Recover at the main push.
+- Exam logs now include foot-contact toggles and maximum knee angle.
+
+**Knee sign check:** `RagdollDef.Girl()` sets knee limits to `0.0..2.4` radians, and the ROM’s curled knee target is positive (`1.3`), so positive angle corresponds to flexion. **Key L** was unused.
+
+**Build:** succeeded with 0 warnings and 0 errors.
+
+
+---
+
+
+ектор RECOVER, общие веса x0.49, повторение: 1, травмы: да (Frozen)
+Сохраняю в C:/Users/fbits/AppData/Roaming/Godot/app_userdata/RealAndroid/chips/motor_nn.chip
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.74 дребезг=6 колено=0.05
+  exam1 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.74 дребезг=6 колено=0.05
+  exam2 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.74 дребезг=6 колено=0.05
+  exam3 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.74 дребезг=6 колено=0.05
+gen  400  RECOVER  exam 1.619 (2/4) pose 28 %  replay 0.614  спина 20 % / грудь 40 %  mean 1.581  best 3.955  241 t/s
+  exam0 толчок +20% ПАДЕНИЕ(голова) t=4.09s recover=3.09s шаг=75px acute=1.00(lumbar@2.18s) поза=0.00 дребезг=52 колено=1.89
+  exam2 толчок +20% ПАДЕНИЕ(голова) t=7.34s recover=6.34s шаг=109px acute=1.00(ankle_f@2.58s) поза=0.00 дребезг=114 колено=2.01
+  exam1 толчок -40% СТОИТ t=7.50s recover=0.60s шаг=7px acute=0.00 поза=0.57 дребезг=48 колено=0.16
+  exam3 толчок -40% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=164px acute=1.00(ankle_n@2.48s) поза=0.00 дребезг=110 колено=2.44
+gen  420  RECOVER  exam 3.224 (4/4) pose 26 %  replay 0.555  спина 5 % / грудь 70 %  mean 1.816  best 3.955  242 t/s
+  exam1 толчок -75% ПАДЕНИЕ(голова) t=3.03s recover=2.03s шаг=16px acute=1.00(lumbar@2.93s) поза=0.00 дребезг=25 колено=0.82
+  exam0 толчок +10% ПАДЕНИЕ(голова) t=3.23s recover=2.23s шаг=35px acute=1.00(lumbar@3.14s) поза=0.00 дребезг=21 колено=0.94
+  exam2 толчок +10% ПАДЕНИЕ(голова) t=3.87s recover=2.87s шаг=54px acute=1.00(thoracic@2.55s) поза=0.00 дребезг=24 колено=1.64
+  exam3 толчок -75% НЕ ВЕРНУЛАСЬ t=7.50s recover=2.80s шаг=96px acute=0.93(ankle_f@6.44s) поза=0.00 дребезг=193 колено=1.60
+gen  440  RECOVER  exam 3.356 (4/4) pose 43 %  replay 0.618  спина 20 % / грудь 65 %  mean 1.293  best 4.091  240 t/s  ★
+  exam0 толчок +25% ПАДЕНИЕ(голова) t=5.64s recover=4.64s шаг=73px acute=1.00(ankle_f@2.80s) поза=0.00 дребезг=60 колено=1.46
+  exam1 толчок -70% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=72px acute=0.55(ankle_n@2.51s) поза=0.00 дребезг=72 колено=0.48
+  exam2 толчок +25% НЕ ВЕРНУЛАСЬ t=7.50s recover=5.80s шаг=86px acute=0.71(ankle_n@6.12s) поза=0.00 дребезг=82 колено=0.48
+  exam3 толчок -70% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=60px acute=0.19(ankle_n@6.30s) поза=0.00 дребезг=96 колено=0.48
+gen  460  RECOVER  exam 0.279 (1/4) pose 0 %  replay -0.471  спина 45 % / грудь 55 %  mean 1.144  best 4.122  240 t/s
+  exam0 толчок +45% ПАДЕНИЕ(голова) t=2.48s recover=1.48s шаг=37px acute=0.48(ankle_n@1.67s) поза=0.00 дребезг=24 колено=0.60
+  exam2 толчок +45% ПАДЕНИЕ(голова) t=2.73s recover=1.73s шаг=47px acute=0.91(thoracic@2.68s) поза=0.00 дребезг=11 колено=0.81
+  exam1 толчок -50% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=89px acute=0.58(lumbar@4.68s) поза=0.00 дребезг=124 колено=0.48
+  exam3 толчок -50% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=88px acute=0.39(ankle_n@3.28s) поза=0.00 дребезг=112 колено=0.48
+gen  480  RECOVER  exam -0.904 (0/4) pose 0 %  replay 0.525  спина 50 % / грудь 70 %  mean 0.728  best 4.122  240 t/s
+  exam0 толчок +45% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=97px acute=0.56(ankle_f@6.60s) поза=0.00 дребезг=84 колено=1.08
+  exam1 толчок -65% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=73px acute=0.35(elbow_n@1.01s) поза=0.00 дребезг=96 колено=0.71
+  exam2 толчок +45% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=92px acute=0.56(thoracic@1.41s) поза=0.00 дребезг=95 колено=0.87
+  exam3 толчок -65% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=95px acute=0.49(neck@1.01s) поза=0.00 дребезг=95 колено=0.49
+gen  500  RECOVER  exam 2.965 (4/4) pose 0 %  replay -0.232  спина 75 % / грудь 100 %  mean 1.719  best 4.122  241 t/s
+  exam0 толчок +80% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=77px acute=0.55(thoracic@1.01s) поза=0.00 дребезг=61 колено=0.61
+  exam1 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=5.90s шаг=61px acute=0.99(neck@1.01s) поза=0.00 дребезг=77 колено=0.64
+  exam2 толчок +80% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=120px acute=1.00(thoracic@1.01s) поза=0.00 дребезг=84 колено=1.55
+  exam3 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=85px acute=0.72(neck@1.01s) поза=0.00 дребезг=90 колено=0.49
+gen  520  RECOVER  exam 1.249 (2/4) pose 0 %  replay -0.282  спина 100 % / грудь 100 %  mean 1.258  best 4.122  240 t/s
+  exam1 толчок -100% ПАДЕНИЕ(наклон) t=4.08s recover=3.08s шаг=174px acute=1.00(lumbar@4.01s) поза=0.00 дребезг=46 колено=2.13
+  exam0 толчок +100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=92px acute=0.95(thoracic@1.01s) поза=0.00 дребезг=58 колено=0.60
+  exam2 толчок +100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=92px acute=0.98(thoracic@1.01s) поза=0.00 дребезг=14 колено=0.70
+  exam3 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=78px acute=0.77(neck@1.01s) поза=0.00 дребезг=46 колено=0.58
+gen  540  RECOVER  exam 0.911 (2/4) pose 0 %  replay -0.341  спина 80 % / грудь 100 %  mean 1.882  best 4.122  241 t/s
+  exam2 толчок +75% ПАДЕНИЕ(наклон) t=2.16s recover=1.16s шаг=171px acute=1.00(thoracic@2.08s) поза=0.00 дребезг=25 колено=1.31
+  exam1 толчок -100% ПАДЕНИЕ(голова) t=5.08s recover=4.08s шаг=50px acute=1.00(thoracic@5.06s) поза=0.00 дребезг=85 колено=1.05
+  exam0 толчок +75% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=98px acute=0.91(thoracic@1.01s) поза=0.00 дребезг=16 колено=0.65
+  exam3 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=60px acute=0.81(neck@1.01s) поза=0.00 дребезг=52 колено=0.72
+gen  560  RECOVER  exam 3.055 (4/4) pose 0 %  replay -0.431  спина 95 % / грудь 100 %  mean 1.524  best 4.122  240 t/s
+  exam2 толчок +100% ПАДЕНИЕ(наклон) t=1.67s recover=0.67s шаг=94px acute=1.00(thoracic@1.01s) поза=0.00 дребезг=6 колено=1.63
+  exam0 толчок +100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=88px acute=1.00(thoracic@1.01s) поза=0.00 дребезг=10 колено=0.64
+  exam1 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=58px acute=0.24(elbow_f@1.78s) поза=0.00 дребезг=32 колено=0.57
+  exam3 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=70px acute=0.66(neck@1.01s) поза=0.00 дребезг=8 колено=0.50
+gen  580  RECOVER  exam 0.901 (2/4) pose 0 %  replay -0.261  спина 80 % / грудь 100 %  mean 1.664  best 4.122  240 t/s
+  exam0 толчок +75% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=70px acute=0.45(thoracic@1.01s) поза=0.00 дребезг=10 колено=0.47
+  exam1 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=151px acute=1.00(ankle_n@2.43s) поза=0.00 дребезг=66 колено=2.30
+  exam2 толчок +75% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=78px acute=0.82(ankle_n@2.65s) поза=0.00 дребезг=23 колено=0.68
+  exam3 толчок -100% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=67px acute=0.67(neck@1.01s) поза=0.00 дребезг=21 колено=0.64

@@ -1,0 +1,44 @@
+Requested diagnostics
+    a) Balance channel layout:
+        public static class Bal
+        {
+            public const int PelvisTilt = 0, PelvisW = 1, ChestTilt = 2, ChestW = 3,
+                            ComX = 4, ComVx = 5, Xi = 6, HalfWidth = 7, Margin = 8,
+                            GroundN = 9, GroundF = 10, Support = 11, Lying = 12, ComH = 13, Size = 14;
+        }
+
+    Balance calculations in VestibularRom.Tick:
+        float c = 0.5f * (body.SupportMin + body.SupportMax);
+        half = 0.5f * (body.SupportMax - body.SupportMin) / H;
+        o[Bal.ComX] = (body.Com.X - c) / H;
+        o[Bal.Xi]   = (xi - c) / H;
+        o[Bal.Support] = 1f;
+
+    If there is no support:
+        else { o[Bal.ComX] = 0f; o[Bal.Xi] = 0f; o[Bal.Support] = 0f; }
+    
+    Margin and per-foot ground signals:
+        o[Bal.Margin]  = body.HasSupport ? half - MathF.Abs(o[Bal.Xi]) : -1f;
+        o[Bal.GroundN] = body.Grounded[body.FootNear] ? 1f : 0f;
+        o[Bal.GroundF] = body.Grounded[body.FootFar] ? 1f : 0f;
+
+     b) Exam pass criterion and curriculum update:
+        if (r.Role == 1)
+        {
+            _exam += f;
+            _examQ += r.Ep?.Quality ?? 0f;
+            _examTotal++;
+            if (!r.Fell) _examOk++;
+        }
+
+    An exam counts as passed when its run did not fall. The curriculum receives that count here:
+        var cur = _main as ICurriculum;
+        float bonus = cur?.Bonus(_examOk, _examTotal) ?? 0f;
+        string level = cur?.Status ?? "";
+        cur?.Update(_examOk, _examTotal);
+
+    c) Per-foot contact: Yes. Ragdoll.Grounded stores contact state per body, updated with Bodies[f].GetContactCount() > 0. The feet have explicit indices FootNear and FootFar, which map to foot_n and foot_f.
+    
+    d) Hip and knee joint limits in RagdollDef.Girl():
+        d.J($"hip_{s}",      "pelvis",     $"thigh_{s}", new(0, -90),  -2.0f, 0.6f, 1.00f);
+        d.J($"knee_{s}",     $"thigh_{s}", $"shin_{s}",  new(0, -48),   0.0f, 2.4f, 1.00f);

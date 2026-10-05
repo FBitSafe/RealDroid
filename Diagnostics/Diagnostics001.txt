@@ -1,0 +1,263 @@
+DreamTasks.cs
+
+    // ───────── RECOVER: после толчка вернуть ξ в опору и вернуться в STAND ─────────
+    public sealed class RecoverTask : IDreamTask, ICurriculum
+    {
+        public float EpisodeSeconds = 6f;
+        public float PushMax = 3000f;              // импульс в грудь при уровне 100%
+        public float Level = 0f, LevelStep = 0.05f;
+        public float Alive = 3f, Upright = 0.2f, PoseWeight = 0.4f, PoseSigma = 0.25f;
+        public float MarginCost = 0.5f, ReturnBonus = 1f;
+        public float EnergyCost = 0.3f, EffortCost = 0.5f, HeatCost = 0.3f;
+        public float PainCost = 0.4f, AcuteCost = 1f;
+        public float Fall = 3f;
+
+        public int Sector => Protocol.Recover;
+        public float Seconds => EpisodeSeconds;
+        public int ExamCount => 3;
+        public float FallPenalty => Fall;
+        public IChip MakeArbiter() => new ArbiterRom();
+        public IEpisode Begin(Ragdoll g, int seed, int examIndex) => new RecoverEpisode(this, g, seed, examIndex);
+
+        public string Status => $"толчок {Level:P0}";
+        public float Bonus(int ok, int total) => Level * ok / Math.Max(total, 1);
+        public void Update(int ok, int total)
+        {
+            if (ok == total) Level = Math.Min(1f, Level + LevelStep);
+            else if (ok <= total / 4) Level = Math.Max(0f, Level - LevelStep);
+        }
+    }
+
+    sealed class RecoverEpisode : IEpisode
+    {
+        static readonly float[] ExamPush = { 1f, -1f, 0.5f, -0.5f };
+
+        readonly DreamScoreTerm[] _rewards =
+        {
+            new("Alive", "Surviving this step."),
+            new("Upright", "Reward for staying upright."),
+            new("Pose", "Reward for matching the standing pose."),
+            new("Return", "Bonus for returning to Stand after recovery."),
+        };
+        readonly DreamScoreTerm[] _penalties =
+        {
+            new("Energy", "Power used by the motors."),
+            new("Effort", "Motor activation effort."),
+            new("Heat", "Penalty for motor heat."),
+            new("Support margin", "Penalty for stepping outside support."),
+            new("Pain", "Pain signal."),
+            new("Acute pain", "Protective acute-pain signal."),
+            new("Fall", "Per remaining physics tick after failure."),
+        };
+        readonly RecoverTask T;
+        readonly Ragdoll G;
+        readonly int _pushTick;
+        readonly float _imp, _jwSum;
+        readonly float[] _ref, _jw, _pain;
+        bool _pushed, _wasRecover;
+        float _endPose;
+
+        public float Quality => _endPose;
+        public IReadOnlyList<DreamScoreTerm> Rewards => _rewards;
+        public IReadOnlyList<DreamScoreTerm> Penalties => _penalties;
+
+        public void MarkFailed() => _penalties[6].Value = T.Fall;
+
+        public RecoverEpisode(RecoverTask t, Ragdoll g, int seed, int examIndex)
+        {
+            T = t; G = g;
+            var r = new Random(seed);
+            int tps = Engine.PhysicsTicksPerSecond;
+            if (examIndex >= 0)
+            {
+                _pushTick = tps;
+                _imp = ExamPush[examIndex % ExamPush.Length] * t.Level * t.PushMax;
+            }
+            else
+            {
+                _pushTick = (int)((1.0 + r.NextDouble()) * tps);
+                float sign = r.Next(2) * 2 - 1;
+                _imp = sign * (0.3f + 0.7f * (float)r.NextDouble()) * t.Level * t.PushMax;
+            }
+
+            int nj = g.Def.Joints.Count;
+            _ref = new float[nj]; _jw = new float[nj];
+            for (int j = 0; j < nj; j++)
+            {
+                string n = g.Def.Joints[j].Name;
+                _ref[j] = MotorRom.Stand(n).Item1;
+                _jw[j] = n.StartsWith("shoulder") || n.StartsWith("elbow") ? 0.3f : n == "neck" ? 0.5f : 1f;
+                _jwSum += _jw[j];
+            }
+            g.Brain.Bus.Channels.TryGetValue("pain.total", out _pain);
+        }
+
+        public float Step(float dt, int tick, out bool failed)
+        {
+            var g = G;
+            if (tick == _pushTick)
+            {
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));
+                _pushed = true;
+            }
+
+            float hy = -g.Bodies[g.Head].GlobalPosition.Y;
+            float rot = MathF.Abs(g.Tilt(g.Chest));
+            failed = hy < 0.4f * g.HeadHeight0 || rot > 1.2f;
+            if (failed)
+            {
+                _endPose = 0f;
+                ClearTerms();
+                return 0f;
+            }
+
+            float err = 0f;
+            for (int j = 0; j < _ref.Length; j++)
+            {
+                float d = g.Angle[j] - _ref[j];
+                err += _jw[j] * d * d;
+            }
+            float pose = MathF.Exp(-(err / _jwSum) / (T.PoseSigma * T.PoseSigma));
+
+            int state = g.Brain.Slots[(int)LobeKind.Arbiter].Chip is ArbiterRom a ? a.State : Protocol.Stand;
+            var bl = g.Brain.Balance;
+
+            float p1 = 0f, p2 = 0f;
+            if (_pain != null) { p1 = _pain[1]; p2 = _pain[2]; }
+
+            _rewards[0].Value = T.Alive;
+            _rewards[1].Value = T.Upright * (1f - rot / 1.2f);
+            _rewards[2].Value = 0f;
+            _rewards[3].Value = 0f;
+            _penalties[0].Value = T.EnergyCost * g.Power;
+            _penalties[1].Value = T.EffortCost * g.Effort;
+            _penalties[2].Value = T.HeatCost * g.Heat;
+            _penalties[3].Value = 0f;
+            _penalties[4].Value = T.PainCost * p1;
+            _penalties[5].Value = T.AcuteCost * p2;
+
+            float rew = T.Alive + T.Upright * (1f - rot / 1.2f)
+                    - T.EnergyCost * g.Power - T.EffortCost * g.Effort - T.HeatCost * g.Heat
+                    - T.PainCost * p1 - T.AcuteCost * p2;
+
+            if (!_pushed)
+            {
+                _rewards[2].Value = T.PoseWeight * pose;
+                rew += T.PoseWeight * pose;
+            }
+            else if (state == Protocol.Recover)
+            {
+                _wasRecover = true;
+                if (bl[Bal.Support] > 0.5f)
+                {
+                    _penalties[3].Value = T.MarginCost * MathF.Max(0f, -bl[Bal.Margin]);   // шаг в воздухе не штрафуем
+                    rew -= _penalties[3].Value;
+                }
+            }
+            else
+            {
+                _rewards[2].Value = T.PoseWeight * pose;
+                rew += T.PoseWeight * pose;
+                if (_wasRecover) _rewards[3].Value = T.ReturnBonus;
+                if (_wasRecover) rew += T.ReturnBonus;
+            }
+
+            _endPose = state == Protocol.Stand ? pose : 0f;
+            return rew;
+        }
+
+        void ClearTerms()
+        {
+            foreach (var term in _rewards) term.Value = 0f;
+            for (int i = 0; i < 6; i++) _penalties[i].Value = 0f;
+        }
+
+    }
+Brain.cs
+    void Compose()
+        {
+            float bm = Slots[(int)LobeKind.Motor].Boot;
+            float br = Slots[(int)LobeKind.Reflex].Boot;
+            float inh = Math.Clamp(ReflexInhibit[0], 0f, 1f);
+            for (int j = 0; j < Target.Length; j++)
+            {
+                Target[j] = MotorTarget[j] + ReflexTarget[j] * br;
+                Stiff[j]  = Math.Max(MotorStiff[j] * bm * (1f - inh), ReflexStiff[j] * br);
+            }
+        }
+    }
+RomChips.cs
+    // ───────── РЕФЛЕКСЫ ─────────
+    public sealed class ReflexRom : IChip
+    {
+        public LobeKind Kind => LobeKind.Reflex;
+        public string Label { get; private set; }
+        public float AnkleGain = 4f, AnkleDamp = 0.6f, AnkleMax = 0.8f, HipGain = 0.8f, SpineGain = 0.4f;
+        public float Scale = 1f;
+
+        // боль (направленная): отдёргивание внутрь хода
+        public float WithdrawGain = 2f, WithdrawStep = 0.3f, WithdrawStiff = 0.6f;
+        // острая: оцепенение всего тела
+        public float GuardThreshold = 0.05f, GuardFreeze = 0.5f, GuardStiff = 0.5f, FlinchInhibit = 0.3f;
+        // дискомфорт рефлекса не вызывает — он для драйвов и решений
+
+        public static ReflexRom Stock() => new() { Label = "REFLEX ROM 1.2" };
+        public static ReflexRom Hyper() => new()
+            { Label = "REFLEX x2.5", Scale = 2.5f, WithdrawGain = 5f, GuardStiff = 1f, FlinchInhibit = 0.6f };
+
+        float[] _limit, _side, _total;
+
+        public void Reset(Brain b)
+        {
+            b.Bus.Channels.TryGetValue("pain.limit", out _limit);
+            b.Bus.Channels.TryGetValue("pain.side", out _side);
+            b.Bus.Channels.TryGetValue("pain.total", out _total);
+        }
+
+        public void Tick(Brain b, float dt)
+        {
+            var body = b.Body;
+            var bl = b.Balance;
+            Array.Clear(b.ReflexTarget);
+            Array.Clear(b.ReflexStiff);
+            b.ReflexInhibit[0] = 0f;
+
+            if (bl[Bal.Lying] < 0.5f)
+            {
+                if (bl[Bal.Support] > 0.5f)
+                {
+                    float off = Scale * (AnkleGain * bl[Bal.ComX] + AnkleDamp * bl[Bal.ComVx]);
+                    off = Math.Clamp(off, -AnkleMax, AnkleMax);
+                    foreach (int a in body.Ankles) b.ReflexTarget[a] += off;
+                }
+                foreach (int h in body.Hips)  b.ReflexTarget[h] += Scale * HipGain * bl[Bal.PelvisTilt];
+                foreach (int s in body.Spine) b.ReflexTarget[s] -= Scale * SpineGain * bl[Bal.ChestTilt];
+            }
+
+            if (_limit == null || _side == null) return;
+            int n = _limit.Length;
+            Span<bool> withdrawn = stackalloc bool[n];
+            for (int j = 0; j < n; j++)
+            {
+                float w = Math.Min(1f, _limit[j] * WithdrawGain);
+                if (w < 0.01f) continue;
+                withdrawn[j] = true;
+                float desired = b.Angle[j] - _side[j] * WithdrawStep;
+                float delta = desired - b.MotorTarget[j];
+                b.ReflexTarget[j] += w * (delta - b.ReflexTarget[j]);
+                b.ReflexStiff[j] = Math.Max(b.ReflexStiff[j], w * WithdrawStiff);
+            }
+
+            float x = _total != null ? _total[2] : 0f;
+            if (x <= GuardThreshold) return;
+            float f = Math.Min(1f, GuardFreeze * x);
+            for (int j = 0; j < n; j++)
+            {
+                if (withdrawn[j]) continue;
+                float hold = b.Angle[j] - b.MotorTarget[j];
+                b.ReflexTarget[j] += f * (hold - b.ReflexTarget[j]);
+                b.ReflexStiff[j] = Math.Max(b.ReflexStiff[j], GuardStiff * x);
+            }
+            b.ReflexInhibit[0] = Math.Min(1f, FlinchInhibit * x);
+        }
+    }

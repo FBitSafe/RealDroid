@@ -1,0 +1,119 @@
+I’ll inspect Fix008’s exact instructions and verify its anchors in the current files before making changes.
+
+Read , lines 1 to 34
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Fixes\\Fix008.txt",
+  "view_range": [
+    1,
+    34
+  ]
+}
+
+Search for `ExamPush|readonly int _pushTick|MarginCost =|FootMarginCost|foreach \(int a i...`
+
+Search for `XiOutside|void Report\(|DreamLog.cs|public static class DreamLog|Level =`
+
+Read , lines 116 to 148
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Dream.cs",
+  "view_range": [
+    116,
+    148
+  ]
+}
+
+Read , lines 1 to 6
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RomChips.cs",
+  "view_range": [
+    1,
+    6
+  ]
+}
+
+Read , lines 206 to 430
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\DreamTasks.cs",
+  "view_range": [
+    206,
+    430
+  ]
+}
+
+Read , lines 60 to 68
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\RagdollDef.cs",
+  "view_range": [
+    60,
+    68
+  ]
+}
+
+Read , lines 96 to 105
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Ragdoll.cs",
+  "view_range": [
+    96,
+    105
+  ]
+}
+
+Edit , , 
+
+Ran terminal command: dotnet build "New Game Project.csproj" --no-restore
+
+Search for `\.Level\b|ExamPush|LevelOf\(|FootByJoint|FootOf\(|DoNotTouchSwingingLeg|Swing...`
+
+Read , lines 206 to 224
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\Dream.cs",
+  "view_range": [
+    206,
+    224
+  ]
+}
+
+Read , lines 45 to 66
+Completed with input: {
+  "path": "C:\\Users\\fbits\\OneDrive\\Documents\\new-game-project\\EsOptimizer.cs",
+  "view_range": [
+    45,
+    66
+  ]
+}
+
+Checked , , , no problems found
+
+Search for `\.Level\b|ExamPush|XiOutside|void Report\(|FootMarginCost|public static class...`
+
+Implemented Fix007 and the Fix008 amendments. **Build succeeded with 0 warnings and 0 errors.**
+
+- **Recover curriculum:** `DreamTasks.cs` now tracks separate push levels for the back (+x) and chest (−x), updates them from exam results by direction, and gives each training episode two pushes—one in each direction. Exams cover both directions, twice each. Added the requested duration, frontier-push sampling, foot-margin penalty, and exam diagnostics.
+- **Step 0 / level references:** Outside `DreamTasks.cs`, the Recover level assignment and ROM-test log were in `Dream.cs`. The assignment now sets both directional levels; the ROM-test log prints `Status`. The remaining `n.Level(j)` in `BrainPanel.cs` is a separate API and was left unchanged. `ExamPush` had no uses outside `RecoverEpisode`; it has been removed there.
+- **Ankle reflex:** `RomChips.cs` now applies the ankle reflex only to grounded feet, while retaining the swinging-leg guard. `FootOf` caches joint-child-to-body mappings and validates that `ankle_n` maps to `FootNear` and `ankle_f` to `FootFar`.
+- **Existing log prerequisites:** Confirmed `XiOutside`, `Report`, `FootMarginCost`, and `DreamLog.cs` were present before applying the changes.
+
+**Step 6 — seed pairing and rank calculation, verbatim:**
+
+```csharp
+int seed = _rng.Next();
+var task = _replay.Count > 0 && _rng.NextDouble() < ReplayShare ? _replay[_rng.Next(_replay.Count)] : _main;
+_runs.Add(MakeRun(pop[2 * p], task, seed, -1, 0));
+_runs.Add(MakeRun(pop[2 * p + 1], task, seed, -1, 0));
+```
+
+```csharp
+int idx = Enumerable.Range(0, N).OrderBy(i => fitness[i]).ToArray();
+var rank = new float[N];
+for (int r = 0; r < N; r++) rank[idx[r]] = r / (float)(N - 1) - 0.5f;
+
+var g = new float[_n];
+for (int p = 0; p < _pairs; p++)
+{
+    float w = rank[2 * p] - rank[2 * p + 1];
+    var e = _eps[p];
+    for (int i = 0; i < _n; i++) g[i] += w * e[i];
+}
+```
+
+Both candidates in each antithetic pair already share the same seed and task, so no seed change was needed.

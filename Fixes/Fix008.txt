@@ -1,0 +1,34 @@
+# Дополнение к Fix007 (выполнить Fix007 целиком с этими поправками)
+Режим: Agent. Якорь не найден дословно — СТОП и отчёт.
+
+## Поправка к шагу 0
+Найденные места в `Dream.cs` поправить по смыслу:
+- присваивание уровня (override из аргументов/настроек) → выставлять оба уровня: `LevelFwd = LevelBack = <значение>`;
+- вывод уровня в лог ROM-теста → печатать `Status` вместо `Level`.
+Если ROM-тест по `Level` вычисляет СИЛУ толчка, брать `LevelOf(dir)`, где dir = 0 при толчке в +x и 1 при толчке в −x. Если код теста устроен иначе и сопоставить не получается — СТОП, процитировать этот код.
+`n.Level(j)` в `BrainPanel.cs` не трогать.
+Дополнительно: grep `ExamPush` по всему проекту. Если он используется вне `RecoverEpisode` (например в ROM-тесте) — НЕ удалять его, а оставить как есть и сообщить в отчёте.
+
+## Шаг 7 — новый якорь (заменяет якорь из Fix007)
+Якорь:
+```
+                    foreach (int a in body.Ankles)
+                        if (!DoNotTouchSwingingLeg || !b.SwingingJoints[a]) b.ReflexTarget[a] += off;
+```
+Заменить на:
+```
+                    foreach (int a in body.Ankles)
+                    {
+                        if (DoNotTouchSwingingLeg && b.SwingingJoints[a]) continue;   // диагностический флаг сохраняем
+                        if (!body.Grounded[FootOf(body, a)]) continue;               // стопа в воздухе — не крутить
+                        b.ReflexTarget[a] += off;
+                    }
+```
+Реализация `FootOf`: как в Fix007 (тело-ребёнок сустава через Def.Joints → индекс в Bodies, с кэшем). Проверить, что для ankle_n получается `body.FootNear`, для ankle_f — `body.FootFar`. Если не совпадает — СТОП.
+
+## Проверка перед началом
+Убедиться, что в `DreamTasks.cs` уже есть правки прошлого задания: `XiOutside`, `Report`, `FootMarginCost`, и что существует `DreamLog.cs`. Если чего-то нет — СТОП, перечислить, чего не хватает.
+
+## В отчёт добавить
+- что именно поменяно в `Dream.cs` (до/после);
+- где используются `DoNotTouchSwingingLeg` и `SwingingJoints`: кто заполняет `SwingingJoints` и как включается флаг.

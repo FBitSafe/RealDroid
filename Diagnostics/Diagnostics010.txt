@@ -1,0 +1,263 @@
+Fix014 — residual MOTOR NN, incompatible-chip handling, and gyro training share
+Date: 2026-10-05
+
+0. Reconnaissance (source excerpts)
+
+a) NeuralMotorChip (before this change):
+
+    public const float StiffBias = 2.5f;
+    public const string Format = "motor_v3";
+
+    public static uint IoHash(RagdollDef d, int i, int o, int s)
+    {
+        string str = $"{Format}|{i}|{o}|{s}|{Bal.Size}|" +
+                     string.Join(",", d.Joints.Select(j => j.Name));
+        uint h = 2166136261;
+        foreach (char c in str) { h ^= c; h *= 16777619; }
+        return h;
+    }
+
+Weight storage order in the constructor:
+
+    _oW1 = k; k += s.H1 * s.In;
+    _oB1 = k; k += s.H1;
+    _oE  = k; k += s.H1 * s.Sectors;
+    _oG  = k; k += s.H1 * s.Sectors;
+    _oW2 = k; k += s.H2 * s.H1;
+    _oB2 = k; k += s.H2;
+    _oW3 = k; k += s.Out * s.H2;
+    _oB3 = k; k += s.Out;
+    _oO  = k;
+
+Blank-chip initializer before this change:
+
+    var w = new float[ParamCount(s)];
+    var c = new NeuralMotorChip(s, w) { Name = "BLANK" };
+    ...
+    for (int i = 0; i < s.H1 * s.In; i++) w[c._oW1 + i] = Rng.Gauss(r) * s1;
+    for (int i = 0; i < s.H2 * s.H1; i++) w[c._oW2 + i] = Rng.Gauss(r) * s2;
+    return c;
+
+The new array's biases, sector parameters, W3, b3, and Op were zero implicitly.
+The new initializer explicitly clears W3, b3, and Op after initializing W1/W2.
+
+Direct pass and output mapping before this change:
+
+    public void Tick(Brain b, float dt)
+    {
+        var s = Spec;
+        int nj = s.Out / 2;
+        if (Burnt || _lo == null || nj != b.MotorTarget.Length || s.In != InputSize(nj))
+        {
+            Array.Clear(b.MotorTarget); Array.Clear(b.MotorStiff);
+            return;
+        }
+
+        int k = 0;
+        for (int j = 0; j < nj; j++) _x[k++] = b.Angle[j];
+        for (int j = 0; j < nj; j++) _x[k++] = b.Vel[j];
+        for (int i = 0; i < Bal.Size; i++) _x[k++] = b.Balance[i];
+        for (int i = 0; i < 3; i++) _x[k++] = _pain != null ? _pain[i] : 0f;
+        for (int i = 0; i < 4; i++) _x[k++] = b.Cmd[i];
+
+        var p = b.P;
+        int S = s.Sectors;
+
+        for (int h = 0; h < s.H1; h++)
+        {
+            float a = W[_oB1 + h], g = 1f;
+            int row = _oW1 + h * s.In;
+            for (int i = 0; i < s.In; i++) a += W[row + i] * _x[i];
+            int e = _oE + h * S, gg = _oG + h * S;
+            for (int q = 0; q < S; q++) { a += W[e + q] * p[q]; g += W[gg + q] * p[q]; }
+            _h1[h] = MathF.Tanh(a) * g;
+        }
+        for (int h = 0; h < s.H2; h++)
+        {
+            float a = W[_oB2 + h];
+            int row = _oW2 + h * s.H1;
+            for (int i = 0; i < s.H1; i++) a += W[row + i] * _h1[i];
+            _h2[h] = MathF.Tanh(a);
+        }
+        for (int o = 0; o < s.Out; o++)
+        {
+            float a = W[_oB3 + o];
+            int row = _oW3 + o * s.H2;
+            for (int h = 0; h < s.H2; h++) a += W[row + h] * _h2[h];
+            int oo = _oO + o * S;
+            for (int q = 0; q < S; q++) a += W[oo + q] * p[q];
+            _o[o] = a;
+        }
+
+        for (int j = 0; j < nj; j++)
+        {
+            float t = MathF.Tanh(_o[j]);
+            float tgt = t >= 0f ? t * _hi[j] : -t * _lo[j];
+            float st = 1f / (1f + MathF.Exp(-(_o[nj + j] - StiffBias)));
+            if (!float.IsFinite(tgt) || !float.IsFinite(st))
+            {
+                Burnt = true;
+                Array.Clear(b.MotorTarget); Array.Clear(b.MotorStiff);
+                return;
+            }
+            b.MotorTarget[j] = tgt;
+            b.MotorStiff[j] = st;
+        }
+    }
+
+Thus target used tanh mapped to joint limits, and stiffness used
+sigmoid(raw stiff output - 2.5). Format was motor_v3. IO hash used format,
+input/output/sector sizes, Bal.Size, and the ordered joint names.
+
+b) MotorRom.Reset prepares protocol pose/stiffness arrays for each joint:
+
+    for (int k = 0; k < Protocol.Count; k++)
+    {
+        _pose[k] = new float[n];
+        _stiff[k] = new float[n];
+    }
+    for (int j = 0; j < n; j++)
+    {
+        string s = joints[j].Name;
+        (_pose[Protocol.Stand][j],   _stiff[Protocol.Stand][j])   = Stand(s);
+        (_pose[Protocol.Recover][j], _stiff[Protocol.Recover][j]) = Recover(s);
+        (_pose[Protocol.Getup][j],   _stiff[Protocol.Getup][j])   = Curl(s);
+    }
+
+MotorRom.Tick in full:
+
+    public void Tick(Brain b, float dt)
+    {
+        Array.Clear(b.SwingingJoints);
+        for (int j = 0; j < b.MotorTarget.Length; j++)
+        {
+            float t = 0f, s = 0f;
+            for (int k = 0; k < Protocol.Count; k++)
+            {
+                float p = b.P[k];
+                if (p < 1e-4f) continue;
+                t += p * _pose[k][j];
+                s += p * _stiff[k][j];
+            }
+            b.MotorTarget[j] = t;
+            b.MotorStiff[j] = s;
+        }
+
+        if (CapturePointStepping) ApplyCapturePointStep(b, dt);
+    }
+
+It mixes each protocol pose/stiffness by b.P. CapturePointStep may then
+override swing-joint targets/stiffness and updates b.SwingingJoints. ROM
+does not write other bus channels.
+
+c) Main uses the variant factory:
+
+    _variants[LobeKind.Motor] = new Func<IChip>[] {
+        () => new MotorRom(), LoadTrainedMotor,
+        () => NeuralMotorChip.Blank(_def, 1)
+    };
+
+Before this change, LoadTrainedMotor returned a blank chip when loading
+returned null. ChipFile compared the stored MotorSpec to SpecFor(def,...);
+a mismatch warned "несовместимый разъём" and returned null. Since IoHash is
+part of MotorSpec, a hash mismatch was rejected by ChipFile but Main then
+selected a blank NN in the trained-chip slot.
+
+1. Residual motor implementation
+
+NeuralMotorChip now holds one MotorRom and preallocated base target/stiffness
+arrays. Reset initializes the ROM. Each Tick first runs the ROM, snapshots
+its outputs, then evaluates the NN. The outputs are now:
+
+    b.MotorTarget[j] = Math.Clamp(_baseT[j] + ResTarget * MathF.Tanh(_o[j]),
+                                  _lo[j], _hi[j]);
+    b.MotorStiff[j] = Math.Clamp(_baseS[j] +
+                                 ResStiff * MathF.Tanh(_o[nj + j]), 0f, 1f);
+
+    public float ResTarget = 0.5f, ResStiff = 0.4f;
+
+For a fresh chip, W3, b3, and Op are explicitly zero. Therefore raw output is
+zero, both tanh residuals are zero, and output equals the ROM target/stiffness.
+The ROM-defined targets are within the girl's joint limits. This equality
+follows directly from the implemented equations and initialization; the
+Godot runtime was not available here for an in-engine comparison.
+
+Changed version/hash:
+
+    public const string Format = "motor_v4";
+    const string IoMode = "residual:rom";
+    string str = $"{Format}|{IoMode}|{i}|{o}|{s}|{Bal.Size}|" +
+                 string.Join(",", d.Joints.Select(j => j.Name));
+
+The existing user chip's stored v3 IO hash was 0x2fed4d23; the computed v4
+residual-ROM hash is 0x15a215c3. ChipFile therefore rejects the old file.
+It is read-only on load and is not overwritten by this incompatibility.
+
+2. Incompatible chip handling
+
+ChipFile now reports whether the IO hash is incompatible. Main prints/shows:
+
+    MOTOR NN: файл v3 несовместим, нужен сон с --fresh
+
+and returns MOTOR ROM from the trained-chip variant factory. Recover sleep
+refuses the incompatible chip instead of treating it as a blank. Dream
+training also requires explicit --fresh before starting from a blank on a
+hash mismatch. The endurance probe requires a compatible v4 chip in nn mode
+and reports an incompatible v3 chip rather than substituting another motor.
+
+3. Gyroscope during training
+
+Before: MakeRun created a Ragdoll using only its Position initializer; its
+GyroOn therefore stayed at Ragdoll's default true for all runs.
+
+After:
+
+    [Export] public float GyroOffShare = 0.3f;
+    ...
+    if (examIdx < 0)
+        g.GyroOn = new Random(seed ^ 0x5EED).NextDouble() >= GyroOffShare;
+    else
+        g.GyroOn = true;
+
+Pair construction confirms the same seed is passed to both candidates:
+
+    int seed = _rng.Next();
+    _runs.Add(MakeRun(pop[2 * p], task, seed, -1, 0));
+    _runs.Add(MakeRun(pop[2 * p + 1], task, seed, -1, 0));
+
+Thus both members of a pair share gyro state. Exam runs always keep gyro on.
+The endurance probe's separate `--gyro on|off` setting remains unchanged.
+
+4. Probe v4
+
+The nn probe uses ChipFile.LoadMotor with the same IO-hash check, logs loaded
+chip name/generation/path/weight count, and rejects incompatible v3 weights.
+Its --gyro option remains supported.
+
+Validation:
+
+    dotnet build "New Game Project.csproj" --no-restore
+    Build succeeded; 0 warnings, 0 errors.
+    Problems check: no errors in NeuralMotorChip.cs, ChipFile.cs, Main.cs,
+    or Dream.cs.
+
+Godot 4.7.2 headless runtime checks:
+
+    --probe 1 --motor rom --wear off --gyro off
+    probe START ...
+    probe END t=1.0 ... reason=time
+
+A temporary v4 chip with all-zero weights was then loaded in nn probe mode
+and compared under identical probe settings. Both runs produced exactly the
+same END metrics:
+
+    comX=+0.016 xi=+0.013 margin=0.12 поза=0.98
+    Tmax=25.0(ankle_n) imax=1.00(lumbar) heat=0.00
+    power=0.01 stiffMean=0.75 spread=0px
+
+The temporary chip was removed after the comparison.
+
+The existing user motor_nn.chip was tested with nn probe mode. It was rejected
+with "несовместимый IO hash или разъём" and
+"MOTOR NN: file v3 is incompatible with this probe; retrain with --fresh.",
+exiting with code 1. The old chip was only read and was not overwritten.

@@ -1,0 +1,196 @@
+# Задание: RECOVER — честная учебная программа, штраф по стопам, диагностика экзаменов
+Режим: Agent. Если якорь не найден дословно — СТОП и отчёт, ничего не придумывать.
+
+## 1. EDIT `DreamTasks.cs` — параметры RecoverTask
+Якорь:
+```
+        public float MarginCost = 0.5f, ReturnBonus = 1f;
+```
+Заменить на:
+```
+        public float MarginCost = 0.5f, ReturnBonus = 1f;
+        public float FootMarginCost = 3f, FootPad = 10f;   // штраф за ξ вне [минX стоп−pad, максX стоп+pad], на 100 px
+        public float FrontierShare = 0.6f;                 // доля тренировочных толчков 0.8..1.2 от уровня
+```
+
+## 2. EDIT `DreamTasks.cs` — поля RecoverEpisode
+Якорь:
+```
+        bool _pushed, _wasRecover;
+        float _endPose;
+```
+Заменить на:
+```
+        bool _pushed, _wasRecover, _reported;
+        float _endPose;
+        readonly int _examIndex, _footA, _footB, _lastTick;
+        float _maxAcute, _maxSpread, _recoverSec;
+```
+
+## 3. EDIT `DreamTasks.cs` — тренировочный толчок
+Якорь:
+```
+                float sign = r.Next(2) * 2 - 1;
+                _imp = sign * (0.3f + 0.7f * (float)r.NextDouble()) * t.Level * t.PushMax;
+```
+Заменить на:
+```
+                float sign = r.Next(2) * 2 - 1;
+                float mag = r.NextDouble() < t.FrontierShare
+                    ? 0.8f + 0.4f * (float)r.NextDouble()
+                    : 0.3f + 0.5f * (float)r.NextDouble();
+                _imp = sign * mag * t.Level * t.PushMax;
+```
+
+## 4. EDIT `DreamTasks.cs` — инициализация в конструкторе
+Якорь:
+```
+            g.Brain.Bus.Channels.TryGetValue("pain.total", out _pain);
+        }
+```
+Заменить на:
+```
+            g.Brain.Bus.Channels.TryGetValue("pain.total", out _pain);
+            _examIndex = examIndex;
+            _lastTick = (int)(t.EpisodeSeconds * tps) - 1;
+            _footA = /* индекс тела стопы f в g.Bodies */;
+            _footB = /* индекс тела стопы n в g.Bodies */;
+        }
+```
+Индексы стоп найти в `Ragdoll.cs` / `RagdollDef.cs` (по полям или по имени тела, начинающемуся с "foot").
+Если однозначного способа нет — СТОП, в отчёте показать, как устроены тела.
+
+## 5. EDIT `DreamTasks.cs` — запись острой боли
+Якорь:
+```
+            if (_pain != null) { p1 = _pain[1]; p2 = _pain[2]; }
+```
+Заменить на:
+```
+            if (_pain != null) { p1 = _pain[1]; p2 = _pain[2]; }
+            _maxAcute = MathF.Max(_maxAcute, p2);
+```
+
+## 6. EDIT `DreamTasks.cs` — отчёт при падении
+Якорь:
+```
+            if (failed)
+            {
+                _endPose = 0f;
+```
+Заменить на:
+```
+            if (failed)
+            {
+                Report(hy < 0.4f * g.HeadHeight0 ? "ПАДЕНИЕ(голова)" : "ПАДЕНИЕ(наклон)", tick);
+                _endPose = 0f;
+```
+
+## 7. EDIT `DreamTasks.cs` — награда после толчка
+Якорь (весь блок):
+```
+            else if (state == Protocol.Recover)
+            {
+                _wasRecover = true;
+                if (bl[Bal.Support] > 0.5f)
+                {
+                    _penalties[3].Value = T.MarginCost * MathF.Max(0f, -bl[Bal.Margin]);   // шаг в воздухе не штрафуем
+                    rew -= _penalties[3].Value;
+                }
+            }
+            else
+            {
+                _rewards[2].Value = T.PoseWeight * pose;
+                rew += T.PoseWeight * pose;
+                if (_wasRecover) _rewards[3].Value = T.ReturnBonus;
+                if (_wasRecover) rew += T.ReturnBonus;
+            }
+
+            _endPose = state == Protocol.Stand ? pose : 0f;
+            return rew;
+```
+Заменить на:
+```
+            else
+            {
+                // опора = промежуток между стопами независимо от контакта:
+                // подвинуть маховую стопу к ξ выгодно сразу, долины нет
+                float outside = XiOutside(out float spread);
+                _maxSpread = MathF.Max(_maxSpread, spread);
+                _penalties[3].Value = T.FootMarginCost * outside / 100f;
+                rew -= _penalties[3].Value;
+
+                if (state == Protocol.Recover) { _wasRecover = true; _recoverSec += dt; }
+                else
+                {
+                    _rewards[2].Value = T.PoseWeight * pose;
+                    _rewards[3].Value = T.ReturnBonus;          // за STAND после толчка, без условия _wasRecover
+                    rew += T.PoseWeight * pose + T.ReturnBonus;
+                }
+            }
+
+            _endPose = state == Protocol.Stand ? pose : 0f;
+            if (tick >= _lastTick) Report(state == Protocol.Stand ? "СТОИТ" : "НЕ ВЕРНУЛАСЬ", tick);
+            return rew;
+        }
+
+        float XiOutside(out float spread)
+        {
+            var g = G;
+            float m = 0f, cx = 0f, cy = 0f, vx = 0f;
+            foreach (var b in g.Bodies)
+            {
+                m += b.Mass;
+                cx += b.Mass * b.GlobalPosition.X;
+                cy += b.Mass * b.GlobalPosition.Y;
+                vx += b.Mass * b.LinearVelocity.X;
+            }
+            cx /= m; cy /= m; vx /= m;
+            var fa = g.Bodies[_footA].GlobalPosition;
+            var fb = g.Bodies[_footB].GlobalPosition;
+            float h = MathF.Max(MathF.Max(fa.Y, fb.Y) - cy, 20f);   // Y вниз, пол около 0
+            float xi = cx + vx / MathF.Sqrt(980f / h);
+            float lo = MathF.Min(fa.X, fb.X) - T.FootPad;
+            float hi = MathF.Max(fa.X, fb.X) + T.FootPad;
+            spread = MathF.Abs(fa.X - fb.X);
+            return MathF.Max(0f, MathF.Max(lo - xi, xi - hi));
+        }
+
+        void Report(string how, int tick)
+        {
+            if (_reported || _examIndex < 0) return;
+            _reported = true;
+            DreamLog.Line($"  exam{_examIndex} толчок {_imp / T.PushMax:+0%;-0%} {how} t={tick / (float)Engine.PhysicsTicksPerSecond:0.00}s " +
+                          $"recover={_recoverSec:0.00}s шаг={_maxSpread:0}px acute={_maxAcute:0.00} поза={_endPose:0.00}");
+```
+Внимание: у старого `Step` закрывающая скобка `}` идёт после `return rew;`. После замены она закрывает `Report`.
+Проверить, что скобки сошлись. Если `g.Bodies` не содержит `RigidBody2D` (нет `Mass` / `LinearVelocity`) — СТОП.
+
+## 8. CREATE `DreamLog.cs`
+```csharp
+using Godot;
+
+public static class DreamLog
+{
+    const string Path = "user://dream_log.txt";
+    public static void Line(string s)
+    {
+        GD.Print(s);
+        using var f = FileAccess.FileExists(Path)
+            ? FileAccess.Open(Path, FileAccess.ModeFlags.ReadWrite)
+            : FileAccess.Open(Path, FileAccess.ModeFlags.Write);
+        if (f == null) return;
+        f.SeekEnd();
+        f.StoreLine(s);
+    }
+}
+```
+Найти в `Dream.cs` / `DreamJob.cs` вывод строки поколения (`GD.Print` со строкой "gen") и заменить `GD.Print` на `DreamLog.Line`.
+Если таких мест несколько — заменить во всех и перечислить их в отчёте.
+Если у остальных классов в проекте есть namespace — положить DreamLog в тот же namespace.
+
+## 9. `dotnet build`, затем отчёт. В отчёт ВСТАВИТЬ ДОСЛОВНО:
+a) весь класс/перечень `Bal` и код, где вычисляются `Bal.Support`, `Bal.Margin`, `Bal.ComX`;
+b) код, где считается `ok` для экзаменов и вызывается `Update(ok, total)` (критерий «сдал»);
+c) есть ли в Ragdoll контакт отдельно по каждой стопе (имя поля/метода);
+d) пределы суставов hip и knee из `RagdollDef.Girl()`.

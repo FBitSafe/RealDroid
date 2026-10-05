@@ -1,0 +1,197 @@
+# Fix009: RECOVER — награда по итогу, выход из RECOVER только «с приставленной ногой», принудительный вход во сне, диагностика острой боли
+Режим: Agent. Якорь не найден дословно — СТОП и отчёт. Код содержит Fix007 и Fix008.
+
+## 0. Разведка ArbiterRom (сначала, ничего не меняя)
+Найти класс `ArbiterRom`. ВСТАВИТЬ В ОТЧЁТ ДОСЛОВНО: его Tick, условия переходов STAND↔RECOVER↔GETUP, поле `State`, смешивание.
+Выяснить и написать в отчёте: в каких единицах `Bal.ComVx` (px/s или /H), чему равен H.
+
+## 1. ArbiterRom — по спецификации (якорей нет, поэтому показать до/после)
+a) Добавить `public void Force(int protocol)`: немедленно перейти в `protocol` тем же путём, что и обычный переход (со смешиванием), сбросить таймер выхода.
+b) Переход RECOVER→STAND разрешать ТОЛЬКО если непрерывно в течение `ExitDwell = 0.3f` с одновременно:
+   - выполнено существующее условие выхода по ξ/Margin;
+   - `Bal.GroundN > 0.5 && Bal.GroundF > 0.5`;
+   - расстояние по X между `Bodies[FootNear]` и `Bodies[FootFar]` ≤ `ExitSpread = 20f` px;
+   - |скорость ЦМ по X| ≤ эквивалент 15 px/s (`ExitVel`, пересчитать в единицы Bal.ComVx).
+   Таймер копить по dt арбитра, сбрасывать при нарушении любого условия.
+c) Остальные переходы (в GETUP, вход в RECOVER) не трогать.
+Если в ArbiterRom нет явного перехода RECOVER→STAND (например, только непрерывное смешивание p) — СТОП, процитировать код.
+
+## 2. EDIT `DreamTasks.cs` — параметры
+Якорь:
+```
+        public float FrontierShare = 0.6f;
+```
+Заменить на:
+```
+        public float FrontierShare = 0.6f;
+        public float PoseDelay = 1.5f, PoseRamp = 1f;          // поза после толчка: включается плавно, без привязки к протоколу
+        public float CheckWindow = 0.75f;                      // окно итога перед 2-м толчком и в конце эпизода
+        public float SettleSpread = 20f, SettleV = 15f;        // px, px/s
+        public float ForceShare = 0.5f;                        // доля тренировок с принудительным RECOVER при толчке
+```
+
+## 3. EDIT — поля RecoverEpisode
+Якорь:
+```
+        bool _failRec;
+```
+Заменить на:
+```
+        bool _failRec, _force;
+        int _lastPushTick, _winTicks, _prePushTick = -1, _acuteJoint = -1;
+        float _prePush, _acuteAt;
+        float[] _acuteCh;
+```
+
+## 4. EDIT — экзамены 2,3: предварительный толчок (чтобы не дублировали 0,1)
+Якорь:
+```
+                _imp = (_dir == 0 ? 1f : -1f) * t.LevelOf(_dir) * t.PushMax;
+                t.ExamBegun(_dir);
+```
+Заменить на:
+```
+                _imp = (_dir == 0 ? 1f : -1f) * t.LevelOf(_dir) * t.PushMax;
+                t.ExamBegun(_dir);
+                if (examIndex >= 2) { _prePushTick = (int)(0.4f * tps); _prePush = -0.2f * _imp; }
+```
+
+## 5. EDIT — принудительный RECOVER в тренировке
+Якорь:
+```
+                _imp2 = (first == 0 ? -1f : 1f) * Mag(r, t) * t.LevelOf(1 - first) * t.PushMax;
+```
+Заменить на:
+```
+                _imp2 = (first == 0 ? -1f : 1f) * Mag(r, t) * t.LevelOf(1 - first) * t.PushMax;
+                _force = r.NextDouble() < t.ForceShare;
+```
+
+## 6. EDIT — инициализация
+Якорь:
+```
+            _lastTick = (int)(t.EpisodeSeconds * tps) - 1;
+```
+Заменить на:
+```
+            _lastTick = (int)(t.EpisodeSeconds * tps) - 1;
+            _winTicks = (int)(t.CheckWindow * tps);
+            _lastPushTick = _pushTick;
+            g.Brain.Bus.Channels.TryGetValue("pain.acute", out _acuteCh);
+```
+Если канала `pain.acute` нет или его длина ≠ числу суставов — найти, где хранится острая боль по суставам; если нигде — оставить `_acuteCh = null` и сообщить.
+
+## 7. EDIT — толчки
+Якорь:
+```
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));
+                _pushed = true;
+            }
+            if (tick == _pushTick2)
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp2, 0f));
+```
+Заменить на:
+```
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));
+                _pushed = true;
+                _lastPushTick = tick;
+                if (_force) ForceRecover();
+            }
+            if (tick == _pushTick2)
+            {
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp2, 0f));
+                _lastPushTick = tick;
+                if (_force) ForceRecover();
+            }
+            if (tick == _prePushTick)
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_prePush, 0f));
+```
+
+## 8. EDIT — какой сустав даёт острую боль
+Якорь:
+```
+            _maxAcute = MathF.Max(_maxAcute, p2);
+```
+Заменить на:
+```
+            _maxAcute = MathF.Max(_maxAcute, p2);
+            if (_acuteCh != null)
+                for (int j = 0; j < _acuteCh.Length; j++)
+                    if (_acuteJoint < 0 || _acuteCh[j] > _acuteCh[_acuteJoint] + 1e-4f && _acuteCh[j] > 0.05f)
+                    {
+                        if (_acuteCh[j] <= 0.05f) continue;
+                        _acuteJoint = j; _acuteAt = tick / (float)Engine.PhysicsTicksPerSecond;
+                    }
+```
+(Смысл: запомнить сустав с наибольшей острой болью > 0.05 за эпизод и время. Если логика получилась кривой — переписать по смыслу, проще.)
+
+## 9. EDIT — награда после толчка
+Якорь:
+```
+                if (state == Protocol.Recover) { _wasRecover = true; _recoverSec += dt; }
+                else
+                {
+                    _rewards[2].Value = T.PoseWeight * pose;
+                    _rewards[3].Value = T.ReturnBonus;          // за STAND после толчка, без условия _wasRecover
+                    rew += T.PoseWeight * pose + T.ReturnBonus;
+                }
+```
+Заменить на:
+```
+                if (state == Protocol.Recover) { _wasRecover = true; _recoverSec += dt; }
+
+                // поза — не зависит от протокола, плавно включается после последнего толчка
+                float since = (tick - _lastPushTick) / (float)Engine.PhysicsTicksPerSecond;
+                float pw = Math.Clamp((since - T.PoseDelay) / T.PoseRamp, 0f, 1f);
+                _rewards[2].Value = T.PoseWeight * pw * pose;
+                rew += _rewards[2].Value;
+
+                // итог: в контрольном окне — спокойно стоит в STAND с приставленной ногой
+                if (InCheckWindow(tick) && state == Protocol.Stand
+                    && spread <= T.SettleSpread && outside <= 0f && MathF.Abs(comVx) <= T.SettleV)
+                {
+                    _rewards[3].Value = T.ReturnBonus;
+                    rew += T.ReturnBonus;
+                }
+```
+И в этом же блоке строку
+```
+                float outside = XiOutside(out float spread);
+```
+заменить на
+```
+                float outside = XiOutside(out float spread, out float comVx);
+```
+
+## 10. EDIT — XiOutside отдаёт скорость
+Якорь: `        float XiOutside(out float spread)` → `        float XiOutside(out float spread, out float comVx)`
+Якорь: `            spread = MathF.Abs(fa.X - fb.X);` → 
+```
+            spread = MathF.Abs(fa.X - fb.X);
+            comVx = vx;
+```
+
+## 11. Добавить в RecoverEpisode (рядом с `Mag`)
+```csharp
+        bool InCheckWindow(int tick) =>
+            (_pushTick2 > 0 && tick >= _pushTick2 - _winTicks && tick < _pushTick2) || tick > _lastTick - _winTicks;
+
+        void ForceRecover()
+        {
+            if (G.Brain.Slots[(int)LobeKind.Arbiter].Chip is ArbiterRom a) a.Force(Protocol.Recover);
+        }
+```
+
+## 12. EDIT — лог
+Якорь:
+```
+                          $"recover={_recoverSec:0.00}s шаг={_maxSpread:0}px acute={_maxAcute:0.00} поза={_endPose:0.00}");
+```
+Заменить на:
+```
+                          $"recover={_recoverSec:0.00}s шаг={_maxSpread:0}px acute={_maxAcute:0.00}" +
+                          (_acuteJoint >= 0 ? $"({G.Def.Joints[_acuteJoint].Name}@{_acuteAt:0.00}s)" : "") +
+                          $" поза={_endPose:0.00}");
+```
+
+## 13. `dotnet build`, отчёт: дословный код из шага 0, до/после ArbiterRom, единицы ComVx, судьба шага 8.

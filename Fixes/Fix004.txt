@@ -1,0 +1,138 @@
+# Задание для агента: диагностика видимости во сне
+
+## Правила
+Правки только в `Dream.cs`. Каждая операция — `EDIT`: найди якорь (он должен встретиться ровно один раз) и замени. Если якорь не найден или найден больше одного раза, остановись и сообщи об этом. Больше ничего не меняй.
+
+### 1. Якорь
+```csharp
+    Label _hud;
+```
+Замена:
+```csharp
+    Label _hud;
+    Camera2D _cam;
+    Run _examRun;
+    int _lastGenTicks, _failBroken, _failHead, _failTilt, _quickGens;
+```
+
+### 2. Якорь
+```csharp
+            var cam = new Camera2D { Zoom = new Vector2(2.5f, 2.5f), Position = new Vector2(0, -90) };
+            AddChild(cam); cam.MakeCurrent();
+```
+Замена:
+```csharp
+            _cam = new Camera2D { Zoom = new Vector2(2.5f, 2.5f), Position = new Vector2(0, -90) };
+            AddChild(_cam); _cam.MakeCurrent();
+```
+
+### 3. Якорь
+```csharp
+        _runs = new List<Run>();
+```
+Замена:
+```csharp
+        _runs = new List<Run>();
+        _failBroken = _failHead = _failTilt = 0;
+```
+
+### 4. Якорь
+```csharp
+        for (int e = 0; e < _main.ExamCount; e++) _runs.Add(MakeRun(_theta, _main, 1000 + e, e, 1));
+```
+Замена:
+```csharp
+        for (int e = 0; e < _main.ExamCount; e++) _runs.Add(MakeRun(_theta, _main, 1000 + e, e, 1));
+        _examRun = _runs[_N];
+```
+
+### 5. Якорь
+```csharp
+    void Fail(Run r)
+    {
+```
+Замена:
+```csharp
+    void Fail(Run r)
+    {
+        var fg = r.G;
+        if (fg == null || !IsInstanceValid(fg) || fg.Broken || fg.Bodies == null) _failBroken++;
+        else if (-fg.Bodies[fg.Head].GlobalPosition.Y < 0.4f * fg.HeadHeight0) _failHead++;
+        else _failTilt++;
+```
+
+### 6. Якорь
+```csharp
+    void EndGeneration()
+    {
+```
+Замена:
+```csharp
+    void EndGeneration()
+    {
+        _lastGenTicks = _tick;
+        if (_tick < 5)
+        {
+            _quickGens++;
+            if (_quickGens <= 5 || _quickGens % 100 == 0)
+                GD.PushWarning($"Поколение закончилось за {_tick} тиков: взрыв {_failBroken}, голова низко {_failHead}, наклон {_failTilt}");
+        }
+```
+
+### 7. Якорь
+```csharp
+    void CountRate()
+```
+Замена:
+```csharp
+    int CountAlive()
+    {
+        int n = 0;
+        if (_runs != null) foreach (var r in _runs) if (r.Alive) n++;
+        return n;
+    }
+
+    bool ExamPos(out Vector2 p)
+    {
+        p = default;
+        var g = _examRun?.G;
+        if (g == null || !IsInstanceValid(g) || g.Bodies == null || g.Broken) return false;
+        p = g.Bodies[g.Head].GlobalPosition;
+        return p.IsFinite();
+    }
+
+    public override void _Draw()
+    {
+        if (_headless) return;
+        DrawRect(new Rect2(-20000, 0, 40000, 2000), new Color(0.12f, 0.13f, 0.17f));
+        DrawLine(new Vector2(-20000, 0), new Vector2(20000, 0), new Color(0.35f, 0.4f, 0.5f), 1f);
+    }
+
+    void CountRate()
+```
+
+### 8. Якорь
+```csharp
+        if (_hud == null) return;
+```
+Замена:
+```csharp
+        if (_hud == null) return;
+        if (_cam != null && ExamPos(out var head))
+            _cam.Position = _cam.Position.Lerp(new Vector2(head.X, -90), 1f - Mathf.Exp(-3f * (float)delta));
+```
+
+### 9. Якорь
+```csharp
+            $"Скорость: {_rate / Engine.PhysicsTicksPerSecond:F1}×\n\n" +
+```
+Замена:
+```csharp
+            $"Скорость: {_rate / Engine.PhysicsTicksPerSecond:F1}×\n" +
+            $"Клонов: {CountAlive()}/{_runs?.Count ?? 0}   прошлое поколение: {_lastGenTicks} тиков\n" +
+            $"Падения: взрыв {_failBroken}, голова {_failHead}, наклон {_failTilt}\n" +
+            (ExamPos(out var ep) ? $"Экзамен: голова x {ep.X:0} y {ep.Y:0}\n\n" : "Экзамен: тела нет\n\n") +
+```
+
+### Проверка
+`dotnet build`: 0 ошибок. В отчёте укажи для каждого из пунктов 1–9 OK или FAIL.

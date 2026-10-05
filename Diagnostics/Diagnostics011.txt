@@ -1,0 +1,195 @@
+Fix015 — residual NN stepping, compliant landing, and foot-impact penalty
+Date: 2026-10-05
+
+0. Reconnaissance
+
+a) Before this change, MotorRom's relevant defaults and state were:
+
+    const float SwingDuration = 0.45f;
+    const float SwingHeight = 18f;
+    const float SwingStiffness = 0.2f;
+    public bool CapturePointStepping = true;
+    int _swingFoot = -1;
+    float _swingElapsed;
+    float _swingStartX, _swingStartY, _swingTargetX;
+
+The complete pre-change ApplyCapturePointStep was:
+
+    void ApplyCapturePointStep(Brain b, float dt)
+    {
+        var body = b.Body;
+        var recover = b.P[Protocol.Recover];
+        if (recover < 0.5f || !body.HasSupport)
+        {
+            _swingFoot = -1;
+            _stepArmed = true;
+            return;
+        }
+
+        float height = Math.Max(-body.Com.Y, 20f);
+        float omega = MathF.Sqrt(Ragdoll.Gravity / height);
+        float xi = body.Com.X + body.ComVel.X / omega;
+        if (xi >= body.SupportMin && xi <= body.SupportMax) _stepArmed = true;
+
+        if (_swingFoot < 0 && _stepArmed &&
+            (xi < body.SupportMin || xi > body.SupportMax))
+        {
+            float direction = MathF.Sign(body.ComVel.X);
+            if (direction == 0f) direction = xi > body.SupportMax ? 1f : -1f;
+            int first = direction > 0f ? body.FootFar : body.FootNear;
+            int second = direction > 0f ? body.FootNear : body.FootFar;
+            _swingFoot = body.Bodies[first].GlobalPosition.X <= body.Bodies[second].GlobalPosition.X ? first : second;
+            if (direction < 0f)
+                _swingFoot = body.Bodies[first].GlobalPosition.X >= body.Bodies[second].GlobalPosition.X ? first : second;
+
+            _swingElapsed = 0f;
+            var foot = body.Bodies[_swingFoot];
+            _swingStartX = foot.GlobalPosition.X;
+            _swingStartY = foot.GlobalPosition.Y;
+            _swingTargetX = xi + 0.1f * direction * Ragdoll.RefHeight;
+            _stepArmed = false;
+            CapturePointSteps++;
+        }
+
+        if (_swingFoot < 0) return;
+
+        _swingElapsed += dt;
+        float p = Math.Clamp(_swingElapsed / SwingDuration, 0f, 1f);
+        float smooth = p * p * (3f - 2f * p);
+        float targetY = _swingStartY - SwingHeight * MathF.Sin(MathF.PI * p);
+        SetSwingTargets(body, b, _swingFoot, Mathf.Lerp(_swingStartX, _swingTargetX, smooth), targetY, p);
+        if (p >= 1f) _swingFoot = -1;
+    }
+
+The protocol gate is Recover probability >= 0.5 and support present. The
+capture point is COM.X + COM.Vel.X / sqrt(Gravity / height); the selected
+foot is swung to capture point + 0.1 * direction * RefHeight. The transfer
+uses elapsed time / SwingDuration (0..1), smoothstep horizontal motion, and
+a sinusoidal vertical arc. SetSwingTargets marks the swing leg's hip, knee,
+and ankle swinging while progress < 1. Previously there was only this timed
+transfer phase; it had no separate landing phase or contact-driven ramp.
+
+b) Before Fix015, CapturePointStepping was only the public bool defaulting
+to true; no keyboard or diagnostic flag toggled it. Fix015 adds Main's C
+key for the motor chip in the MOTOR slot; it toggles MotorRom's
+CapturePointStepping or NeuralMotorChip's BaseStepping and reports
+"CP STEP ON/OFF".
+
+c) The user-configurable minimum exam level is:
+
+    RecoverTask.MinExamLevel
+    Dream._minLevelOverride
+    --min-level 0..1
+
+Dream applies the configured floor to both Recover directions and prevents
+curriculum reductions below it.
+
+1. NeuralMotorChip
+
+Before: the embedded MotorRom always ran with its own default stepping flag.
+After: added BaseStepping = true and assign it to `_base.CapturePointStepping`
+immediately before `_base.Tick`. NeuralMotorChip does not clear
+Brain.SwingingJoints after that tick. It reads the ROM swing flags to choose
+the smaller residual target scale and to preserve ROM stiffness during swing.
+
+2. Residual groups and smoothing
+
+Added public scales ResTargetUpper = 0.5, ResTargetLeg = 0.2,
+ResTargetSwing = 0.1, ResTau = 0.06, and existing ResStiff = 0.4. Reset
+builds the leg classification once using hip*, knee*, ankle* joint names and
+clears preallocated _rt/_rs filters. In Tick, tanh target/stiff outputs are
+filtered by min(1, dt/ResTau). Target residual scale is selected by
+SwingingJoints first, then leg vs upper. Swing stiffness remains the base ROM
+stiffness. No arrays are allocated by the added per-joint Tick logic.
+
+3. Timed landing phase
+
+The existing step already has a normalized timed phase p = elapsed / 0.45 s,
+so no extra `_air` phase was needed. Added:
+
+    LandPhase = 0.35
+    LandStiff = 0.25
+    LandRamp = 0.12 seconds
+    LandKnee = 0.25 radians
+
+During the final 35% of transfer, hip/knee stiffness is set to LandStiff,
+knee bend is clamped to at least LandKnee, and the ankle target tracks the
+negative world shin rotation, making the foot approximately horizontal.
+Ground contact during this phase or completion of the timed arc enters a
+landing state. Until contact, the landing pose is held at LandStiff. After
+contact, hip/knee stiffness ramps from LandStiff to the current base ROM
+stiffness over LandRamp. SwingingJoints remains set through the landing
+hold/ramp so reflex and NN residuals do not override the scripted leg.
+
+4. Knee reflex coordination
+
+Before: the air-time knee reflex always applied during its timer window.
+After: it first maps the ankle to its knee and only applies when the knee is
+valid and that knee is not marked in Brain.SwingingJoints.
+
+5. Landing impact
+
+RecoverTask now has ImpactCost = 2 and ImpactFree = 60 px/s. RecoverEpisode
+detects only false-to-true foot-ground transitions after the first push,
+measures downward velocity (Y positive), computes
+
+    ImpactCost * (max(0, vy - ImpactFree) / 100)^2
+
+and subtracts it from reward. The new Impact penalty term is reset each
+tick, included in the episode score, and cleared on fall. Exam reports
+include `удар=<maximum landing speed in px/s>`. Ground-contact state is
+sampled at the initial push to avoid counting an already-grounded foot as a
+new landing.
+
+6. Manual verification
+
+Main's C key checks the MOTOR slot regardless of current selection:
+MotorRom toggles CapturePointStepping; NeuralMotorChip toggles BaseStepping.
+Other chip types produce a short explanatory message. C was not previously
+used in Main.
+
+Runtime check (Godot 4.7.2, headless):
+
+    --sector RECOVER --motor-rom-step-test --level 0.80 --shared 1
+
+The exam completed and reported capture-point steps and impact speeds:
+exam0: steps=2, impact=68 px/s; exam1: steps=3, impact=682 px/s;
+exam2: steps=5, impact=25 px/s; exam3: steps=4, impact=150 px/s.
+In this final headless run, all four runs fell before the episode limit
+(0/4 survived). The protocol test was not used for training or saving neural
+weights; this result confirms the metric and scripted-step execution, not
+successful balance performance.
+
+Validation:
+
+    dotnet build "New Game Project.csproj" --no-restore
+    Build succeeded; 0 warnings, 0 errors.
+    Problems check: no errors in NeuralMotorChip.cs, RomChips.cs,
+    DreamTasks.cs, or Main.cs.
+
+
+
+---
+
+
+gen   45  RECOVER  exam 3.785 (4/4) pose 99 %  replay 1.371  спина 25 % / грудь 25 % (мин. 0 %)  mean 1.858  best 4.721  242 t/s  ★
+  exam0 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+  exam1 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.15 удар=0
+  exam2 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+  exam3 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.15 удар=0
+gen   49  RECOVER  exam 2.738 (3/4) pose 74 %  replay 1.376  спина 45 % / грудь 40 % (мин. 0 %)  mean 1.972  best 4.822  240 t/s
+  exam3 толчок -40% ПАДЕНИЕ(голова) t=3.23s recover=2.23s шаг=55px acute=0.00 поза=0.00 дребезг=4 колено=2.52 удар=0
+  exam0 толчок +50% СТОИТ t=7.50s recover=0.80s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.14 удар=0
+  exam1 толчок -40% СТОИТ t=7.50s recover=1.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.16 удар=0
+  exam2 толчок +50% СТОИТ t=7.50s recover=1.90s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.14 удар=0
+gen   53  RECOVER  exam 1.698 (2/4) pose 50 %  replay 1.377  спина 55 % / грудь 35 % (мин. 0 %)  mean 1.417  best 4.822  240 t/s
+  exam0 толчок +50% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.99 дребезг=0 колено=0.13 удар=0
+  exam1 толчок -40% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=26px acute=0.51(ankle_n@2.18s) поза=0.00 дребезг=5 колено=2.37 удар=123
+  exam2 толчок +50% СТОИТ t=7.50s recover=0.80s шаг=1px acute=0.00 поза=0.99 дребезг=0 колено=0.14 удар=0
+  exam3 толчок -40% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=26px acute=0.51(ankle_n@1.98s) поза=0.00 дребезг=5 колено=2.38 удар=124
+gen   57  RECOVER  exam 2.885 (3/4) pose 75 %  replay 1.371  спина 55 % / грудь 35 % (мин. 0 %)  mean 2.298  best 4.822  241 t/s
+  exam2 толчок +55% ПАДЕНИЕ(голова) t=6.27s recover=5.27s шаг=28px acute=1.00(thoracic@6.24s) поза=0.00 дребезг=30 колено=2.37 удар=99
+  exam0 толчок +55% СТОИТ t=7.50s recover=1.00s шаг=1px acute=0.00 поза=0.99 дребезг=0 колено=0.15 удар=0
+  exam1 толчок -40% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=26px acute=0.51(ankle_n@1.95s) поза=0.00 дребезг=5 колено=2.37 удар=124
+  exam3 толчок -40% НЕ ВЕРНУЛАСЬ t=7.50s recover=6.50s шаг=26px acute=0.51(ankle_n@1.85s) поза=0.00 дребезг=5 колено=2.38 удар=123
+gen   58  RECOVER  exam 2.877 (1/4) pose 25 %  replay 1.369  спина 55 % / грудь 40 % (мин. 0 %)  mean 1.689  best 4.822  239 t/s

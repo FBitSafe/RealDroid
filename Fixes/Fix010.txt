@@ -1,0 +1,150 @@
+# Fix010: сглаженный голеностопный рефлекс, колено в переносе, ослабление Guard в RECOVER, принудительный RECOVER на экзамене, GETUP off, диагностика дребезга
+Режим: Agent. Якорь не найден дословно — СТОП и отчёт (отличия только в пробелах/комментариях допустимы, в логике — нет). Код содержит Fix007–Fix009.
+
+## 1. EDIT `RomChips.cs` (ReflexRom) — параметры
+Якорь:
+```
+        public float GuardThreshold = 0.05f, GuardFreeze = 0.5f, GuardStiff = 0.5f, FlinchInhibit = 0.3f;
+```
+Заменить на:
+```
+        public float GuardThreshold = 0.05f, GuardFreeze = 0.5f, GuardStiff = 0.5f, FlinchInhibit = 0.3f;
+        public float GuardRecoverRelief = 0.7f;                  // насколько ослаблять оцепенение при P[Recover]=1
+        public float AnkleEngageTau = 0.12f, AnkleReleaseTau = 0.04f;   // плавное включение / быстрое отпускание, с
+        public float SwingKnee = 0.5f, SwingTime = 0.3f;         // рад, с; 0 — выключить
+        float[] _ank, _air;
+        static readonly System.Collections.Generic.Dictionary<int, int> _kneeOf = new();
+```
+
+## 2. EDIT `RomChips.cs` (ReflexRom.Tick) — голеностоп
+Якорь (весь блок, внутри `if (bl[Bal.Lying] < 0.5f)`):
+```
+                if (bl[Bal.Support] > 0.5f)
+                {
+                    float off = Scale * (AnkleGain * bl[Bal.ComX] + AnkleDamp * bl[Bal.ComVx]);
+                    off = Math.Clamp(off, -AnkleMax, AnkleMax);
+                    foreach (int a in body.Ankles)
+                    {
+                        if (DoNotTouchSwingingLeg && b.SwingingJoints[a]) continue;
+                        if (!body.Grounded[FootOf(body, a)]) continue;
+                        b.ReflexTarget[a] += off;
+                    }
+                }
+```
+Заменить на:
+```
+                int nj = b.ReflexTarget.Length;
+                if (_ank == null || _ank.Length != nj) { _ank = new float[nj]; _air = new float[nj]; }
+                float off = 0f;
+                if (bl[Bal.Support] > 0.5f)
+                    off = Math.Clamp(Scale * (AnkleGain * bl[Bal.ComX] + AnkleDamp * bl[Bal.ComVx]), -AnkleMax, AnkleMax);
+                float pr = Math.Clamp(b.P[Protocol.Recover], 0f, 1f);
+                foreach (int a in body.Ankles)
+                {
+                    int ft = FootOf(body, a);
+                    bool on = body.Grounded[ft] && bl[Bal.Support] > 0.5f
+                              && !(DoNotTouchSwingingLeg && b.SwingingJoints[a]);
+                    float k = Math.Min(1f, dt / (on ? AnkleEngageTau : AnkleReleaseTau));
+                    _ank[a] += ((on ? off : 0f) - _ank[a]) * k;
+                    b.ReflexTarget[a] += _ank[a];
+
+                    // перенос: колено сгибается в первые SwingTime с после отрыва стопы
+                    _air[a] = body.Grounded[ft] ? 0f : _air[a] + dt;
+                    if (SwingKnee > 0f && _air[a] > 0f && _air[a] < SwingTime)
+                        b.ReflexTarget[KneeOf(body, a)] += SwingKnee * pr * MathF.Sin(MathF.PI * _air[a] / SwingTime);
+                }
+```
+Добавить `static int KneeOf(Ragdoll body, int ankleJoint)`: имя сустава ankle_X → индекс сустава knee_X в Def.Joints, кэш в `_kneeOf`. Если knee_X не найден — СТОП.
+Проверить в RagdollDef, что положительный угол колена = сгибание (предел 0..2.4). Если нет — СТОП и сообщить.
+
+## 3. EDIT `RomChips.cs` — Guard ослабляется в RECOVER
+Якорь: `            float f = Math.Min(1f, GuardFreeze * x);`
+Заменить на:
+```
+            float relief = 1f - GuardRecoverRelief * Math.Clamp(b.P[Protocol.Recover], 0f, 1f);
+            float f = Math.Min(1f, GuardFreeze * x) * relief;
+```
+Якорь: `                b.ReflexStiff[j] = Math.Max(b.ReflexStiff[j], GuardStiff * x);`
+Заменить на: `                b.ReflexStiff[j] = Math.Max(b.ReflexStiff[j], GuardStiff * x * relief);`
+Якорь: `            b.ReflexInhibit[0] = Math.Min(1f, FlinchInhibit * x);`
+Заменить на: `            b.ReflexInhibit[0] = Math.Min(1f, FlinchInhibit * x) * relief;`
+
+## 4. EDIT `Brain.cs` — GETUP выключен (вялое тело лёжа)
+Добавить в класс Brain публичные поля:
+```
+        public static bool GetupEnabled = false;
+        public static float LimpStiff = 0.05f;
+```
+Якорь: `            float inh = Math.Clamp(ReflexInhibit[0], 0f, 1f);`
+Заменить на:
+```
+            float inh = Math.Clamp(ReflexInhibit[0], 0f, 1f);
+            float limp = GetupEnabled ? 0f : Math.Clamp(P[Protocol.Getup], 0f, 1f);
+```
+Якорь:
+```
+                Target[j] = MotorTarget[j] + ReflexTarget[j] * br;
+                Stiff[j]  = Math.Max(MotorStiff[j] * bm * (1f - inh), ReflexStiff[j] * br);
+```
+Заменить на:
+```
+                float mt = MotorTarget[j], ms = MotorStiff[j];
+                if (limp > 0f) { mt += (Angle[j] - mt) * limp; ms += (LimpStiff - ms) * limp; }
+                Target[j] = mt + ReflexTarget[j] * br;
+                Stiff[j]  = Math.Max(ms * bm * (1f - inh), ReflexStiff[j] * br);
+```
+Если в Brain нет `P` или `Angle` под этими именами — найти эквиваленты (их использует ArbiterRom/ReflexRom как `b.P`, `b.Angle`), сообщить.
+
+## 5. `Main.cs` — клавиша L
+Рядом с обработкой клавиши K добавить: L → `Brain.GetupEnabled = !Brain.GetupEnabled;` + `GD.Print($"GETUP {(Brain.GetupEnabled ? "ON" : "OFF")}")`. Если L занята — СТОП.
+
+## 6. `DreamTasks.cs` — принудительный RECOVER и на экзамене
+Якорь: `        public float ForceShare = 0.5f;` → `        public float ForceShare = 0.8f;`
+Якорь:
+```
+                if (examIndex >= 2) { _prePushTick = (int)(0.4f * tps); _prePush = -0.2f * _imp; }
+```
+Заменить на:
+```
+                if (examIndex >= 2) { _prePushTick = (int)(0.4f * tps); _prePush = -0.2f * _imp; }
+                _force = true;                                   // экзамен проверяет сам сектор RECOVER
+```
+Проверить, что `_force` не перезаписывается позже для экзаменов.
+
+## 7. `DreamTasks.cs` — диагностика дребезга и колен
+Якорь: `        bool _failRec, _force;`
+Заменить на:
+```
+        bool _failRec, _force;
+        bool _gA, _gB;
+        int _toggles;
+        float _maxKnee;
+        int[] _knees;
+```
+Якорь: `            _lastPushTick = _pushTick;`
+Заменить на:
+```
+            _lastPushTick = _pushTick;
+            var kl = new System.Collections.Generic.List<int>();
+            for (int j = 0; j < nj; j++) if (g.Def.Joints[j].Name.StartsWith("knee")) kl.Add(j);
+            _knees = kl.ToArray();
+```
+(если `nj` в этом месте не виден — использовать `g.Def.Joints.Count`)
+Якорь: `            _maxAcute = MathF.Max(_maxAcute, p2);`
+Заменить на:
+```
+            _maxAcute = MathF.Max(_maxAcute, p2);
+            bool ga = g.Grounded[_footA], gb = g.Grounded[_footB];
+            if (_pushed)
+            {
+                if (ga != _gA) _toggles++;
+                if (gb != _gB) _toggles++;
+                foreach (int k in _knees) _maxKnee = MathF.Max(_maxKnee, g.Angle[k]);
+            }
+            _gA = ga; _gB = gb;
+```
+Лог. Якорь: `{_imp / T.PushMax:+0%;-0%}` → `{_imp / T.PushMax:+0%;-0%;0%}`
+Якорь: `                          $" поза={_endPose:0.00}");`
+Заменить на: `                          $" поза={_endPose:0.00} дребезг={_toggles} колено={_maxKnee:0.00}");`
+
+## 8. `dotnet build`, отчёт: что сделано по шагам, результат проверки знака колена, что с клавишей L.

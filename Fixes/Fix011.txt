@@ -1,0 +1,87 @@
+# Fix011: экзамен RECOVER = «вернулась в STAND», штраф за застывшую широкую стойку, исправление фильтра голеностопа, защита STAND
+Режим: Agent. Якорь не найден дословно — СТОП и отчёт. Код содержит Fix007–Fix010.
+
+## 1. EDIT `RomChips.cs` — фильтровать ВКЛЮЧЕНИЕ рефлекса, а не сигнал (ошибка Fix010: фазовая задержка → раскачка)
+Якорь:
+```
+                    float k = Math.Min(1f, dt / (on ? AnkleEngageTau : AnkleReleaseTau));
+                    _ank[a] += ((on ? off : 0f) - _ank[a]) * k;
+                    b.ReflexTarget[a] += _ank[a];
+```
+Заменить на:
+```
+                    float k = Math.Min(1f, dt / (on ? AnkleEngageTau : AnkleReleaseTau));
+                    _ank[a] += ((on ? 1f : 0f) - _ank[a]) * k;      // _ank — вес включения 0..1
+                    b.ReflexTarget[a] += _ank[a] * off;             // сам сигнал баланса без задержки
+```
+
+## 2. `DreamTasks.cs` — новый интерфейс вердикта экзамена
+Добавить рядом с `IEpisode` (в том же namespace):
+```csharp
+    public interface IExamVerdict { bool Passed { get; } }
+```
+Класс `RecoverEpisode` объявить как реализующий `IExamVerdict` (добавить к списку интерфейсов) и добавить:
+```csharp
+        public bool Passed => !_failRec;
+```
+
+## 3. EDIT `DreamTasks.cs` — «НЕ ВЕРНУЛАСЬ» = провал
+Якорь:
+```
+            if (tick >= _lastTick) Report(state == Protocol.Stand ? "СТОИТ" : "НЕ ВЕРНУЛАСЬ", tick);
+```
+Заменить на:
+```
+            if (tick >= _lastTick)
+            {
+                bool back = state == Protocol.Stand;
+                if (!back) RecordFail();
+                Report(back ? "СТОИТ" : "НЕ ВЕРНУЛАСЬ", tick);
+            }
+```
+
+## 4. EDIT `DreamJob.cs` (или где найдено) — учёт вердикта
+Якорь:
+```
+            if (!r.Fell) _examOk++;
+```
+Заменить на:
+```
+            if (!r.Fell && (r.Ep is not IExamVerdict v || v.Passed)) _examOk++;
+```
+Если `r.Ep` — не эпизод (тип другой) — СТОП, процитировать класс run.
+
+## 5. EDIT `DreamTasks.cs` — параметр
+Якорь: `        public float ForceShare = 0.8f;`
+Заменить на:
+```
+        public float ForceShare = 0.8f;
+        public float StanceCost = 1.5f, CalmVel = 50f;   // штраф за широкую стойку, когда уже спокойно (px/s)
+```
+
+## 6. EDIT `DreamTasks.cs` — штраф за застывший шпагат (только когда опасность прошла)
+Якорь:
+```
+                _rewards[2].Value = T.PoseWeight * pw * pose;
+                rew += _rewards[2].Value;
+```
+Заменить на:
+```
+                _rewards[2].Value = T.PoseWeight * pw * pose;
+                rew += _rewards[2].Value;
+
+                // спокойно, ξ внутри опоры, а ноги всё ещё врозь — пора приставлять ногу
+                float calm = pw * Math.Clamp(1f - MathF.Abs(comVx) / T.CalmVel, 0f, 1f) * (outside <= 0f ? 1f : 0f);
+                float wide = T.StanceCost * calm * MathF.Max(0f, spread - T.SettleSpread) / 100f;
+                _penalties[3].Value += wide;
+                rew -= wide;
+```
+Проверить, что `comVx`, `spread`, `outside`, `pw` объявлены выше в этом блоке. Если нет — СТОП.
+
+## 7. Защита STAND (по спецификации; показать до/после)
+a) Найти `ReplayShare` (используется при выборе задачи для пары). Значение по умолчанию → `0.5f`.
+b) Найти формулу масштаба общих весов `1/(1+2·Σзрелости других)`. Коэффициент 2 → вынести в поле `SharedDamp = 4f`.
+c) Найти, где решается сохранение лучшего (★). Добавить условие: сохранять только если replay текущего поколения ≥ `ReplayFloor = 0.6f` (поле рядом). Если replay в этом поколении не измерялся — не блокировать.
+Если что-то из a–c устроено иначе — НЕ выдумывать, процитировать код в отчёте.
+
+## 8. `dotnet build`, отчёт: до/после шага 7, подтверждение шагов 1–6. Выгрузить отчёт в папку 'Diagnostics' под следующим порядковым номером.

@@ -1,0 +1,264 @@
+# Задание для агента: сектор RECOVER
+
+## Правила
+Только перечисленные файлы. `EDIT` — точный якорь, он должен встретиться ровно один раз, иначе остановись и сообщи. Код вставляй дословно.
+
+### 1. EDIT `DreamTasks.cs`
+
+**1a.** Якорь:
+```csharp
+        Protocol.Stand => new StandTask(),
+```
+Замена:
+```csharp
+        Protocol.Stand => new StandTask(),
+        Protocol.Recover => new RecoverTask(),
+```
+
+**1b.** Якорь:
+```csharp
+public interface IDreamTask
+{
+```
+Замена:
+```csharp
+/// Задача с автоматической сложностью
+public interface ICurriculum
+{
+    string Status { get; }
+    float Bonus(int ok, int total);    // добавка к итогу, чтобы трудный уровень не проигрывал лёгкому
+    void Update(int ok, int total);
+}
+
+public interface IDreamTask
+{
+```
+
+**1c.** Добавь в **конец файла**:
+```csharp
+
+// ───────── RECOVER: после толчка вернуть ξ в опору и вернуться в STAND ─────────
+public sealed class RecoverTask : IDreamTask, ICurriculum
+{
+    public float EpisodeSeconds = 5f;
+    public float PushMax = 3000f;              // импульс в грудь при уровне 100%
+    public float Level = 0.2f, LevelStep = 0.05f;
+    public float Alive = 0.2f, Upright = 0.2f, PoseWeight = 0.4f, PoseSigma = 0.25f;
+    public float MarginCost = 2f, ReturnBonus = 0.4f;
+    public float EnergyCost = 0.3f, EffortCost = 0.5f, HeatCost = 0.3f;
+    public float PainCost = 0.5f, AcuteCost = 1.5f;
+    public float Fall = 0.5f;
+
+    public int Sector => Protocol.Recover;
+    public float Seconds => EpisodeSeconds;
+    public int ExamCount => 4;
+    public float FallPenalty => Fall;
+    public IChip MakeArbiter() => new ArbiterRom();
+    public IEpisode Begin(Ragdoll g, int seed, int examIndex) => new RecoverEpisode(this, g, seed, examIndex);
+
+    public string Status => $"толчок {Level:P0}";
+    public float Bonus(int ok, int total) => Level * ok / Math.Max(total, 1);
+    public void Update(int ok, int total)
+    {
+        if (ok == total) Level = Math.Min(1f, Level + LevelStep);
+        else if (ok <= total / 4) Level = Math.Max(0.1f, Level - LevelStep);
+    }
+}
+
+sealed class RecoverEpisode : IEpisode
+{
+    static readonly float[] ExamPush = { 1f, -1f, 0.5f, -0.5f };
+
+    readonly RecoverTask T;
+    readonly Ragdoll G;
+    readonly int _pushTick;
+    readonly float _imp, _jwSum;
+    readonly float[] _ref, _jw, _pain;
+    bool _pushed, _wasRecover;
+    float _endPose;
+
+    public float Quality => _endPose;
+
+    public RecoverEpisode(RecoverTask t, Ragdoll g, int seed, int examIndex)
+    {
+        T = t; G = g;
+        var r = new Random(seed);
+        int tps = Engine.PhysicsTicksPerSecond;
+        if (examIndex >= 0)
+        {
+            _pushTick = tps;
+            _imp = ExamPush[examIndex % ExamPush.Length] * t.Level * t.PushMax;
+        }
+        else
+        {
+            _pushTick = (int)((1.0 + r.NextDouble()) * tps);
+            float sign = r.Next(2) * 2 - 1;
+            _imp = sign * (0.3f + 0.7f * (float)r.NextDouble()) * t.Level * t.PushMax;
+        }
+
+        int nj = g.Def.Joints.Count;
+        _ref = new float[nj]; _jw = new float[nj];
+        for (int j = 0; j < nj; j++)
+        {
+            string n = g.Def.Joints[j].Name;
+            _ref[j] = MotorRom.Stand(n).Item1;
+            _jw[j] = n.StartsWith("shoulder") || n.StartsWith("elbow") ? 0.3f : n == "neck" ? 0.5f : 1f;
+            _jwSum += _jw[j];
+        }
+        g.Brain.Bus.Channels.TryGetValue("pain.total", out _pain);
+    }
+
+    public float Step(float dt, int tick, out bool failed)
+    {
+        var g = G;
+        if (tick == _pushTick)
+        {
+            g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));
+            _pushed = true;
+        }
+
+        float hy = -g.Bodies[g.Head].GlobalPosition.Y;
+        float rot = MathF.Abs(g.Tilt(g.Chest));
+        failed = hy < 0.4f * g.HeadHeight0 || rot > 1.2f;
+        if (failed) { _endPose = 0f; return 0f; }
+
+        float err = 0f;
+        for (int j = 0; j < _ref.Length; j++)
+        {
+            float d = g.Angle[j] - _ref[j];
+            err += _jw[j] * d * d;
+        }
+        float pose = MathF.Exp(-(err / _jwSum) / (T.PoseSigma * T.PoseSigma));
+
+        int state = g.Brain.Slots[(int)LobeKind.Arbiter].Chip is ArbiterRom a ? a.State : Protocol.Stand;
+        var bl = g.Brain.Balance;
+
+        float p1 = 0f, p2 = 0f;
+        if (_pain != null) { p1 = _pain[1]; p2 = _pain[2]; }
+
+        float rew = T.Alive + T.Upright * (1f - rot / 1.2f)
+                  - T.EnergyCost * g.Power - T.EffortCost * g.Effort - T.HeatCost * g.Heat
+                  - T.PainCost * p1 - T.AcuteCost * p2;
+
+        if (!_pushed) rew += T.PoseWeight * pose;
+        else if (state == Protocol.Recover)
+        {
+            _wasRecover = true;
+            if (bl[Bal.Support] > 0.5f) rew -= T.MarginCost * MathF.Max(0f, -bl[Bal.Margin]);   // шаг в воздухе не штрафуем
+        }
+        else rew += T.PoseWeight * pose + (_wasRecover ? T.ReturnBonus : 0f);
+
+        _endPose = state == Protocol.Stand ? pose : 0f;
+        return rew;
+    }
+}
+```
+
+### 2. EDIT `Dream.cs`
+
+**2a.** Якорь:
+```csharp
+        _es.Tell(fit);
+        _gen++;
+
+        float score = _exam + (nr > 0 ? 0.5f * _replayScore : 0f);
+```
+Замена:
+```csharp
+        var cur = _main as ICurriculum;
+        float bonus = cur?.Bonus(_examOk, _examTotal) ?? 0f;
+        string level = cur?.Status ?? "";
+        cur?.Update(_examOk, _examTotal);
+
+        _es.Tell(fit);
+        _gen++;
+
+        float score = _exam + bonus + (nr > 0 ? 0.5f * _replayScore : 0f);
+```
+
+**2b.** Якорь:
+```csharp
+                 $"  mean {_mean:F3}  best {_best:F3}  {_rate:F0} t/s{saved}");
+```
+Замена:
+```csharp
+                 $"  {level}  mean {_mean:F3}  best {_best:F3}  {_rate:F0} t/s{saved}");
+```
+
+**2c.** Якорь:
+```csharp
+            $"Среднее популяции: {_mean:F3}   Лучший: {_best:F3}\n" +
+```
+Замена:
+```csharp
+            ((_main as ICurriculum)?.Status is { } cs ? $"Сложность: {cs}\n" : "") +
+            $"Среднее популяции: {_mean:F3}   Лучший: {_best:F3}\n" +
+```
+
+### 3. EDIT `Main.cs`
+
+**3a.** Якорь:
+```csharp
+                case Key.T:
+                    DreamJob.Sector = Protocol.Stand;
+                    DreamJob.ChipPath = ChipFile.MotorPath;
+                    DreamJob.Damage = _girl != null && !_girl.Broken && _girl.Dur != null ? DamageSnapshot.Capture(_girl) : null;
+                    GetTree().ChangeSceneToFile("res://Dream.tscn");
+                    break;
+```
+Замена:
+```csharp
+                case Key.T: Sleep(Protocol.Stand); break;
+                case Key.Y: Sleep(Protocol.Recover); break;
+```
+
+**3b.** Якорь:
+```csharp
+    IChip LoadTrainedMotor()
+```
+Замена:
+```csharp
+    void Sleep(int sector)
+    {
+        if (sector != Protocol.Stand)
+        {
+            var c = ChipFile.LoadMotor(ChipFile.MotorPath, _def);
+            if (c == null || c.Maturity[Protocol.Stand] < 0.5f)
+            {
+                Say($"Сначала доучите STAND: зрелость {(c == null ? 0f : c.Maturity[Protocol.Stand]):P0} < 50%");
+                return;
+            }
+        }
+        DreamJob.Sector = sector;
+        DreamJob.ChipPath = ChipFile.MotorPath;
+        DreamJob.Damage = _girl != null && !_girl.Broken && _girl.Dur != null ? DamageSnapshot.Capture(_girl) : null;
+        GetTree().ChangeSceneToFile("res://Dream.tscn");
+    }
+
+    IChip LoadTrainedMotor()
+```
+
+### 4. EDIT `BrainPanel.cs`
+
+**4a.** Якорь:
+```csharp
+            Bar(100, y, 200, b.P[k], On);
+```
+Замена:
+```csharp
+            Bar(100, y, 200, b.P[k], On);
+            if (b.Slots[(int)LobeKind.Motor].Chip is NeuralMotorChip nm)
+                Text(310, y, $"зрел. {nm.Maturity[k]:P0}", Dim, 10);
+```
+
+**4b.** Якорь:
+```csharp
+        y += 16; Text(10, y, "[T] сон: обучение сектора STAND   (во сне [Esc] — проснуться)", Dim, 11);
+```
+Замена:
+```csharp
+        y += 16; Text(10, y, "[T] сон STAND   [Y] сон RECOVER (нужен STAND ≥ 50%)   во сне [Esc]", Dim, 11);
+```
+
+### 5. Проверка
+`dotnet build`: 0 ошибок. Отчёт: OK или FAIL по пунктам 1a–4b, число предупреждений.

@@ -1,0 +1,64 @@
+Fix011 completed with Fix012 amendments
+Date: 2026-10-05
+
+Step 1 — ankle reflex smoothing
+Expected anchor (Fix012):
+    float tau = on ? AnkleEngageTau : AnkleReleaseTau;
+    float k = Math.Min(1f, dt / Math.Max(tau, 1e-6f));
+    _ank[a] += ((on ? off : 0f) - _ank[a]) * k;
+    b.ReflexTarget[a] += _ank[a];
+
+Found: The source matched this updated anchor exactly in RomChips.cs.
+Replaced: _ank now filters the activation weight (0..1), and the immediate balance signal is multiplied by that weight.
+
+Steps 2–6 — Recover exam and stance scoring
+- Added IExamVerdict and implemented it in RecoverEpisode; Passed is false after a recorded exam failure.
+- At the final exam tick, not being in Stand records an exam failure.
+- Both normal exam scoring and the Motor ROM exam count a pass only when the episode verdict passes.
+- Added StanceCost = 1.5 and CalmVel = 50 px/s to RecoverTask.
+- Added the calm, inside-support, wide-stance penalty to the existing support-margin penalty term.
+- Updated the penalty graph term name and explanation to include the wide-stance cost.
+- Verified that comVx, spread, outside, and pw are in scope at the penalty calculation.
+
+Step 7 — shared weights, replay mix, and best-save protection
+Before:
+    ReplayShare = 0.25f
+    SharedLock = 2f
+    _shared = _sharedOverride >= 0f ? _sharedOverride : 1f / (1f + SharedLock * other);
+    if (score > _best) { save best chip; }
+
+After:
+    ReplayShare = 0.5f
+    SharedDamp = 4f
+    ReplayFloor = 0.6f
+    _shared = _sharedOverride >= 0f ? _sharedOverride : 1f / (1f + SharedDamp * other);
+
+For RecoverTask only, the first measured replay generation captures _replayStart.
+The effective floor is Math.Min(ReplayFloor, _replayStart - 0.05f).
+A generation with measured replay may save a new best only when its replay score
+meets that floor. If replay was not measured, or the main task is not RecoverTask,
+the replay guard does not block saving.
+The floor is logged once when the first replay measurement establishes the baseline;
+the baseline cannot be known before that measurement.
+
+Validation:
+    dotnet build "New Game Project.csproj" --no-restore
+    Build succeeded; 0 warnings, 0 errors.
+    Problems check: no errors in RomChips.cs, DreamTasks.cs, or Dream.cs.
+
+Diagnostics007.txt was preserved; this report uses the next available number.
+
+
+
+---
+
+
+exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.78 дребезг=0 колено=0.00
+gen  458  STAND  exam 1.032 (2/2) pose 68 %  replay 3.510    mean 2.300  best 2.787  240 t/s  ★
+exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.77 дребезг=0 колено=0.02
+gen  473  STAND  exam 1.019 (2/2) pose 67 %  replay 3.503    mean 2.320  best 2.787  239 t/s
+exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.78 дребезг=0 колено=0.01
+gen  489  STAND  exam 1.020 (2/2) pose 67 %  replay 3.507    mean 2.437  best 2.787  238 t/s
+
+
+p.s. Лог починки STAND я забыл сохранить, но он дорос до этих значений

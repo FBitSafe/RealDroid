@@ -1,0 +1,178 @@
+# Задание: RECOVER — уровни по направлениям, два толчка в эпизоде, честные пары
+Режим: Agent. Якорь не найден дословно — СТОП и отчёт. Код уже содержит правки прошлого задания (XiOutside, Report, DreamLog).
+
+## 0. Разведка (сначала, ничего не меняя)
+grep по проекту: `\.Level\b` — все обращения к `RecoverTask.Level` вне DreamTasks.cs. Перечислить в отчёте.
+Если они есть (например сохранение/загрузка уровня) — в шаге 1 заменить их на LevelFwd/LevelBack по смыслу, и описать.
+
+## 1. REPLACE `DreamTasks.cs` — класс RecoverTask целиком
+От строки `public sealed class RecoverTask : IDreamTask, ICurriculum` до его закрывающей `}` (перед `sealed class RecoverEpisode`). Новый текст:
+```csharp
+    public sealed class RecoverTask : IDreamTask, ICurriculum
+    {
+        public float EpisodeSeconds = 7.5f, SecondPushDelay = 3f;
+        public float PushMax = 3000f;                       // импульс в грудь при уровне 100%
+        public float LevelFwd = 0f, LevelBack = 0f, LevelStep = 0.05f;   // Fwd: в спину (+x), Back: в грудь (−x)
+        public float Alive = 3f, Upright = 0.2f, PoseWeight = 0.4f, PoseSigma = 0.25f;
+        public float MarginCost = 0.5f, ReturnBonus = 1f;
+        public float FootMarginCost = 3f, FootPad = 10f;
+        public float FrontierShare = 0.6f;
+        public float EnergyCost = 0.3f, EffortCost = 0.5f, HeatCost = 0.3f;
+        public float PainCost = 0.4f, AcuteCost = 1f;
+        public float Fall = 3f;
+
+        public int Sector => Protocol.Recover;
+        public float Seconds => EpisodeSeconds;
+        public int ExamCount => 4;                          // 0,2 — в спину; 1,3 — в грудь
+        public float FallPenalty => Fall;
+        public IChip MakeArbiter() => new ArbiterRom();
+        public IEpisode Begin(Ragdoll g, int seed, int examIndex) => new RecoverEpisode(this, g, seed, examIndex);
+
+        public float LevelOf(int dir) => dir == 0 ? LevelFwd : LevelBack;
+        public string Status => $"спина {LevelFwd:P0} / грудь {LevelBack:P0}";
+        public float Bonus(int ok, int total) => 0.5f * (LevelFwd + LevelBack) * ok / Math.Max(total, 1);
+
+        readonly int[] _examN = new int[2], _examFail = new int[2];
+        internal void ExamBegun(int dir) => _examN[dir]++;
+        internal void ExamFailed(int dir) => _examFail[dir]++;
+
+        public void Update(int ok, int total)
+        {
+            for (int d = 0; d < 2; d++)
+            {
+                if (_examN[d] == 0) continue;
+                int pass = _examN[d] - _examFail[d];
+                float lv = LevelOf(d);
+                if (pass == _examN[d]) lv = Math.Min(1f, lv + LevelStep);
+                else if (pass == 0)    lv = Math.Max(0f, lv - LevelStep);
+                if (d == 0) LevelFwd = lv; else LevelBack = lv;
+            }
+            Array.Clear(_examN); Array.Clear(_examFail);
+        }
+    }
+```
+
+## 2. EDIT `DreamTasks.cs` — поля RecoverEpisode
+Якорь:
+```
+        readonly int _pushTick;
+        readonly float _imp, _jwSum;
+```
+Заменить на:
+```
+        readonly int _pushTick, _pushTick2, _dir;
+        readonly float _imp, _imp2, _jwSum;
+        bool _failRec;
+```
+
+## 3. EDIT `DreamTasks.cs` — выбор толчков в конструкторе
+Якорь (весь блок):
+```
+            if (examIndex >= 0)
+            {
+                _pushTick = tps;
+                _imp = ExamPush[examIndex % ExamPush.Length] * t.Level * t.PushMax;
+            }
+            else
+            {
+                _pushTick = (int)((1.0 + r.NextDouble()) * tps);
+                float sign = r.Next(2) * 2 - 1;
+                float mag = r.NextDouble() < t.FrontierShare
+                    ? 0.8f + 0.4f * (float)r.NextDouble()
+                    : 0.3f + 0.5f * (float)r.NextDouble();
+                _imp = sign * mag * t.Level * t.PushMax;
+            }
+```
+Заменить на:
+```
+            if (examIndex >= 0)
+            {
+                _dir = examIndex % 2;                       // 0 — в спину (+x), 1 — в грудь (−x)
+                _pushTick = tps;
+                _pushTick2 = -1;
+                _imp = (_dir == 0 ? 1f : -1f) * t.LevelOf(_dir) * t.PushMax;
+                t.ExamBegun(_dir);
+            }
+            else
+            {
+                // оба направления в каждом эпизоде: кандидаты сравниваются честно
+                _pushTick = (int)((1.0 + 0.5 * r.NextDouble()) * tps);
+                _pushTick2 = _pushTick + (int)(t.SecondPushDelay * tps);
+                int first = r.Next(2);
+                _dir = first;
+                _imp  = (first == 0 ? 1f : -1f) * Mag(r, t) * t.LevelOf(first) * t.PushMax;
+                _imp2 = (first == 0 ? -1f : 1f) * Mag(r, t) * t.LevelOf(1 - first) * t.PushMax;
+            }
+```
+И добавить в класс RecoverEpisode (рядом с `ClearTerms`):
+```csharp
+        static float Mag(Random r, RecoverTask t) => r.NextDouble() < t.FrontierShare
+            ? 0.8f + 0.4f * (float)r.NextDouble()
+            : 0.3f + 0.5f * (float)r.NextDouble();
+```
+Строку `static readonly float[] ExamPush = { 1f, -1f, 0.5f, -0.5f };` удалить.
+
+## 4. EDIT `DreamTasks.cs` — второй толчок
+Якорь:
+```
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));
+                _pushed = true;
+            }
+```
+Заменить на:
+```
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));
+                _pushed = true;
+            }
+            if (tick == _pushTick2)
+                g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp2, 0f));
+```
+
+## 5. EDIT `DreamTasks.cs` — учёт проваленных экзаменов
+Якорь:
+```
+        public void MarkFailed() => _penalties[6].Value = T.Fall;
+```
+Заменить на:
+```
+        public void MarkFailed() { _penalties[6].Value = T.Fall; RecordFail(); }
+        void RecordFail()
+        {
+            if (_failRec || _examIndex < 0) return;
+            _failRec = true;
+            T.ExamFailed(_dir);
+        }
+```
+Якорь:
+```
+            if (failed)
+            {
+                Report(
+```
+Заменить на:
+```
+            if (failed)
+            {
+                RecordFail();
+                Report(
+```
+
+## 6. Seed пар (DreamJob.cs / Dream.cs)
+Найти, какой `seed` передаётся в `Begin` для тренировочных кандидатов. ВСТАВИТЬ В ОТЧЁТ ДОСЛОВНО этот код и код расчёта рангов.
+Требование: оба кандидата антитетической пары (+ε и −ε) получают ОДИНАКОВЫЙ seed. Если это не так — исправить (seed от номера пары и поколения), описать правку.
+Если для replay/других задач seed общий с RECOVER — не ломать их.
+
+## 7. EDIT `RomChips.cs` — голеностопный рефлекс только опорной стопе
+Якорь:
+```
+                    foreach (int a in body.Ankles) b.ReflexTarget[a] += off;
+```
+Заменить на:
+```
+                    foreach (int a in body.Ankles)
+                        if (body.Grounded[FootOf(body, a)]) b.ReflexTarget[a] += off;
+```
+Реализовать `static int FootOf(Ragdoll body, int ankleJoint)` — индекс тела-ребёнка сустава (через Def.Joints[ankleJoint], имя child → индекс в Bodies). Результат кэшировать.
+Если сопоставление сустав→тело неоднозначно — НЕ делать этот шаг, описать в отчёте.
+
+## 8. `dotnet build`, отчёт: что сделано по шагам 0–7, дословный код из шага 6.

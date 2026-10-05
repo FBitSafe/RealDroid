@@ -1,0 +1,551 @@
+## Файлы
+
+| Файл | Действие |
+|---|---|
+| `Nociception.cs` | Новый |
+| `RomChips.cs`, `BrainPanel.cs` | Заменить целиком |
+| `Ragdoll.cs` | Добавить 3 строки, они описаны ниже |
+
+### `Ragdoll.cs`: 3 строки
+
+**1.** Найдите строку `public Durability Dur;` и вставьте под ней:
+```csharp
+    public Nociception Nerves;
+```
+
+**2.** В методе `Build` найдите `Brain = new Brain(this, nj, Engine.PhysicsTicksPerSecond);` и вставьте под ней:
+```csharp
+        Nerves = new Nociception(this, Brain);
+```
+
+**3.** В методе `_PhysicsProcess` найдите `Dur.Sense(Brain);` и вставьте под ней:
+```csharp
+        Nerves.Tick(dt);
+```
+
+<details>
+<summary><b><code>Nociception.cs</code></b> (новый)</summary>
+
+```csharp
+using System;
+
+/// Ноцицепторы суставов. Это железо: сигнал идёт по тем же кабелям, что и энкодеры.
+/// Оборванный кабель — онемение, голые провода — фантомная боль.
+public sealed class Nociception
+{
+    public float EdgeZone  = 0.15f;  // рад до упора, где начинается дискомфорт
+    public float EdgeGain  = 0.3f;
+    public float StopGain  = 6f;     // боль за рад перехода за упор
+    public float PinchGain = 2f;     // боль за оборот скрутки сверх свободной (защемление)
+    public float HeatStart = 85f, HeatSpan = 40f;
+    public float ShortJolt = 1f;     // удар током при КЗ
+    public float PhantomRate = 3f;   // ложных сигналов в секунду при голых проводах
+    public float Decay = 0.3f;       // с, затухание боли
+    public float MaxPain = 2f;
+
+    public readonly float[] Pain;    // полная боль сустава
+    public readonly float[] Limit;   // направленная часть: край хода, упор, защемление
+    public readonly float[] Side;    // −1 у нижнего предела, +1 у верхнего
+    public readonly float[] Total;   // [0] — общая боль тела
+
+    readonly Ragdoll _b;
+    readonly Random _rng = new(17);
+
+    public Nociception(Ragdoll b, Brain br)
+    {
+        _b = b;
+        int nj = b.Def.Joints.Count;
+        Pain  = br.Bus.Add("pain", nj);
+        Limit = br.Bus.Add("pain.limit", nj);
+        Side  = br.Bus.Add("pain.side", nj);
+        Total = br.Bus.Add("pain.total", 1);
+    }
+
+    public void Tick(float dt)
+    {
+        var b = _b;
+        var d = b.Dur;
+        float k = MathF.Exp(-dt / Decay);
+        float max = 0f, sum = 0f;
+
+        for (int j = 0; j < Pain.Length; j++)
+        {
+            float pl = 0f, p = 0f;
+            bool numb = d.Effects && d.CableCut[j];
+
+            if (!numb)
+            {
+                var jd = b.Def.Joints[j];
+                float a = b.Angle[j];
+                float lo = a - jd.Lower, hi = jd.Upper - a;
+                float edge = MathF.Min(lo, hi);
+
+                if (edge < EdgeZone)
+                {
+                    float e = Math.Clamp((EdgeZone - edge) / EdgeZone, 0f, 1f);
+                    pl += EdgeGain * e * e;
+                    Side[j] = lo < hi ? -1f : 1f;
+                }
+                if (edge < 0f) pl += StopGain * -edge * (1f + d.StopWear[j]);   // треснувший упор болит сильнее
+
+                if (d.Effects)
+                {
+                    float turns = MathF.Abs(d.Twist[j]);
+                    if (turns > d.TwistFree) pl += PinchGain * (turns - d.TwistFree);
+                    if (d.ShortTime[j] > 0f) p += ShortJolt;
+
+                    float bare = Math.Clamp((d.ShortThreshold - d.Insulation[j]) / d.ShortThreshold, 0f, 1f);
+                    if (bare > 0f && _rng.NextDouble() < PhantomRate * bare * dt)
+                    {
+                        pl += 0.5f + (float)_rng.NextDouble();               // фантомная боль
+                        Side[j] = _rng.Next(2) * 2 - 1;
+                    }
+                }
+
+                if (b.Temp[j] > HeatStart) p += (b.Temp[j] - HeatStart) / HeatSpan;
+            }
+
+            p += pl;
+            Limit[j] = MathF.Min(MaxPain, MathF.Max(pl, Limit[j] * k));
+            Pain[j]  = MathF.Min(MaxPain, MathF.Max(p,  Pain[j]  * k));
+            max = MathF.Max(max, Pain[j]);
+            sum += Pain[j];
+        }
+        Total[0] = MathF.Min(MaxPain, max + 0.2f * sum / Pain.Length);
+    }
+}
+```
+</details>
+
+<details>
+<summary><b><code>RomChips.cs</code></b> (замена: торможение в прошивке, отдёргивание в рефлексах)</summary>
+
+```csharp
+using System;
+
+// ───────── ПРОШИВКА ─────────
+public sealed class FirmwareRom : IChip
+{
+    public LobeKind Kind => LobeKind.Firmware;
+    public string Label { get; private set; }
+
+    public float CurrentLimit = 1f;
+    public float Zeta = 0.7f;
+    public float Tone = 0.02f;
+    public float DerateStart = 85f, DerateEnd = 115f;
+    public float MaxAngVel = 40f, MaxLinVel = 3000f;
+    public bool ThermalGuard = true, VelocityGuard = true;
+    public float BrakeZone = 0.3f;   // рад до предела, где включается торможение
+    public float BrakeGain = 0.5f;   // 0 — без торможения
+
+    public static FirmwareRom Stock() => new() { Label = "FW 1.1" };
+    public static FirmwareRom Overclock() => new()
+        { Label = "FW OC!", CurrentLimit = 1.4f, Tone = 0.05f, ThermalGuard = false, BrakeGain = 0f };
+
+    public void Reset(Brain b) { }
+
+    public void Tick(Brain b, float dt)
+    {
+        var body = b.Body;
+        if (VelocityGuard) body.ClampVelocities(MaxAngVel, MaxLinVel);
+        float boot = b.Slots[(int)LobeKind.Firmware].Boot;
+
+        for (int j = 0; j < body.Angle.Length; j++)
+        {
+            var jd = body.Def.Joints[j];
+            float tr = body.RatedTorque(j);
+            float I  = body.JointInertia[j];
+            float a  = b.Angle[j], w = b.Vel[j] * 10f;           // энкодер, а не истина
+            float kp = tr * Math.Max(b.Stiff[j], Tone);
+            float kd = 2f * Zeta * MathF.Sqrt(Math.Max(kp, tr * 0.01f) * I);
+
+            // доводчик: сустав летит в предел — тормозим
+            float near = 0f;
+            if (w < 0f && a - jd.Lower < BrakeZone) near = 1f - Math.Max(a - jd.Lower, 0f) / BrakeZone;
+            else if (w > 0f && jd.Upper - a < BrakeZone) near = 1f - Math.Max(jd.Upper - a, 0f) / BrakeZone;
+            kd += near * BrakeGain * 2f * MathF.Sqrt(tr * I);
+
+            float tgt = Math.Clamp(b.Target[j], jd.Lower, jd.Upper);
+            float tau = Ragdoll.Spd(tgt - a, w, kp, kd, I, dt);
+
+            float lim = CurrentLimit * boot;
+            if (ThermalGuard)
+                lim *= Math.Clamp((DerateEnd - body.Temp[j]) / (DerateEnd - DerateStart), 0f, 1f);
+
+            float i = tau / tr;
+            body.CurrentCmd[j] = float.IsFinite(i) ? Math.Clamp(i, -lim, lim) : 0f;
+        }
+    }
+}
+
+// ───────── ВЕСТИБУЛЯР ─────────
+public sealed class VestibularRom : IChip
+{
+    public LobeKind Kind => LobeKind.Vestibular;
+    public string Label { get; private set; }
+    public float Drift;
+    readonly float[] _bias = new float[Bal.Size];
+    readonly Random _rng = new(3);
+
+    public static VestibularRom Stock() => new() { Label = "VEST ROM" };
+    public static VestibularRom Worn()  => new() { Label = "VEST б/у", Drift = 0.15f };
+
+    public void Reset(Brain b) => Array.Clear(_bias);
+
+    public void Tick(Brain b, float dt)
+    {
+        var body = b.Body;
+        var o = b.Balance;
+        const float H = Ragdoll.RefHeight;
+
+        float ct = body.Tilt(body.Chest);
+        o[Bal.PelvisTilt] = body.Tilt(body.Pelvis);
+        o[Bal.PelvisW]    = body.Bodies[body.Pelvis].AngularVelocity * 0.1f;
+        o[Bal.ChestTilt]  = ct;
+        o[Bal.ChestW]     = body.Bodies[body.Chest].AngularVelocity * 0.1f;
+
+        float z  = Math.Max(-body.Com.Y, 20f);
+        float w0 = MathF.Sqrt(Ragdoll.Gravity / z);
+        float xi = body.Com.X + body.ComVel.X / w0;
+        o[Bal.ComVx] = body.ComVel.X / H;
+        o[Bal.ComH]  = z / H;
+
+        float half = 0f;
+        if (body.HasSupport)
+        {
+            float c = 0.5f * (body.SupportMin + body.SupportMax);
+            half = 0.5f * (body.SupportMax - body.SupportMin) / H;
+            o[Bal.ComX] = (body.Com.X - c) / H;
+            o[Bal.Xi]   = (xi - c) / H;
+            o[Bal.Support] = 1f;
+        }
+        else { o[Bal.ComX] = 0f; o[Bal.Xi] = 0f; o[Bal.Support] = 0f; }
+        o[Bal.HalfWidth] = half;
+
+        if (Drift > 0f)
+        {
+            float a = dt / 2f, s = MathF.Sqrt(2f * a);
+            for (int i = 0; i <= Bal.Xi; i++)
+            {
+                _bias[i] += -a * _bias[i] + s * Rng.Gauss(_rng);
+                o[i] += Drift * _bias[i];
+            }
+        }
+
+        o[Bal.Margin]  = body.HasSupport ? half - MathF.Abs(o[Bal.Xi]) : -1f;
+        o[Bal.GroundN] = body.Grounded[body.FootNear] ? 1f : 0f;
+        o[Bal.GroundF] = body.Grounded[body.FootFar] ? 1f : 0f;
+        float headH = -body.Bodies[body.Head].GlobalPosition.Y;
+        o[Bal.Lying] = headH < 0.4f * body.HeadHeight0 || MathF.Abs(ct) > 1.2f ? 1f : 0f;
+    }
+}
+
+// ───────── РЕФЛЕКСЫ ─────────
+public sealed class ReflexRom : IChip
+{
+    public LobeKind Kind => LobeKind.Reflex;
+    public string Label { get; private set; }
+    public float AnkleGain = 4f, AnkleDamp = 0.6f, AnkleMax = 0.8f, HipGain = 0.8f, SpineGain = 0.4f;
+    public float Scale = 1f;
+
+    // отдёргивание
+    public float WithdrawGain  = 2f;     // боль → сила рефлекса (0..1)
+    public float WithdrawStep  = 0.3f;   // рад, на сколько отводить внутрь хода
+    public float WithdrawStiff = 0.6f;
+
+    public static ReflexRom Stock() => new() { Label = "REFLEX ROM 1.1" };
+    public static ReflexRom Hyper() => new() { Label = "REFLEX x2.5", Scale = 2.5f, WithdrawGain = 5f };
+
+    float[] _limit, _side;
+
+    public void Reset(Brain b)
+    {
+        b.Bus.Channels.TryGetValue("pain.limit", out _limit);
+        b.Bus.Channels.TryGetValue("pain.side", out _side);
+    }
+
+    public void Tick(Brain b, float dt)
+    {
+        var body = b.Body;
+        var bl = b.Balance;
+        Array.Clear(b.ReflexTarget);
+        Array.Clear(b.ReflexStiff);
+        b.ReflexInhibit[0] = 0f;
+
+        // балансные рефлексы — только на ногах
+        if (bl[Bal.Lying] < 0.5f)
+        {
+            if (bl[Bal.Support] > 0.5f)
+            {
+                float off = Scale * (AnkleGain * bl[Bal.ComX] + AnkleDamp * bl[Bal.ComVx]);
+                off = Math.Clamp(off, -AnkleMax, AnkleMax);
+                foreach (int a in body.Ankles) b.ReflexTarget[a] += off;
+            }
+            foreach (int h in body.Hips)  b.ReflexTarget[h] += Scale * HipGain * bl[Bal.PelvisTilt];
+            foreach (int s in body.Spine) b.ReflexTarget[s] -= Scale * SpineGain * bl[Bal.ChestTilt];
+        }
+
+        // отдёргивание — всегда, даже лёжа: уводит сустав от боли внутрь хода
+        if (_limit == null) return;
+        for (int j = 0; j < _limit.Length; j++)
+        {
+            float w = Math.Min(1f, _limit[j] * WithdrawGain);
+            if (w < 0.01f) continue;
+            float desired = b.Angle[j] - _side[j] * WithdrawStep;
+            float delta = desired - b.MotorTarget[j];          // итог: lerp(мотор, desired, w)
+            b.ReflexTarget[j] += w * (delta - b.ReflexTarget[j]);
+            b.ReflexStiff[j] = Math.Max(b.ReflexStiff[j], w * WithdrawStiff);
+        }
+    }
+}
+
+// ───────── АРБИТР ─────────
+public sealed class ArbiterRom : IChip
+{
+    public LobeKind Kind => LobeKind.Arbiter;
+    public string Label => "ARB ROM";
+    public float BlendTime = 0.2f, ExitMargin = 0.05f, MinRecover = 0.5f, GetupCalm = 1f;
+    public int State { get; private set; }
+    public string StateName => Protocol.Names[State];
+    float _timer;
+
+    public void Reset(Brain b) { State = Protocol.Stand; _timer = 0f; }
+
+    public void Tick(Brain b, float dt)
+    {
+        var bl = b.Balance;
+        bool lying = bl[Bal.Lying] > 0.5f;
+        float m = bl[Bal.Margin];
+        _timer += dt;
+
+        switch (State)
+        {
+            case Protocol.Stand:
+                if (lying) Go(Protocol.Getup);
+                else if (m < 0f) Go(Protocol.Recover);
+                break;
+            case Protocol.Recover:
+                if (lying) Go(Protocol.Getup);
+                else if (m > ExitMargin && _timer > MinRecover) Go(Protocol.Stand);
+                break;
+            case Protocol.Getup:
+                if (lying) _timer = 0f;
+                else if (_timer > GetupCalm) Go(Protocol.Stand);
+                break;
+        }
+
+        float a = Math.Min(1f, dt / BlendTime);
+        for (int k = 0; k < Protocol.Count; k++)
+            b.P[k] += ((k == State ? 1f : 0f) - b.P[k]) * a;
+    }
+
+    void Go(int s) { State = s; _timer = 0f; }
+}
+
+// ───────── МОТОРНАЯ КОРА ─────────
+public sealed class MotorRom : IChip
+{
+    public LobeKind Kind => LobeKind.Motor;
+    public string Label => "MOTOR ROM";
+    float[][] _pose, _stiff;
+
+    public void Reset(Brain b)
+    {
+        var joints = b.Body.Def.Joints;
+        int n = joints.Count;
+        _pose = new float[Protocol.Count][];
+        _stiff = new float[Protocol.Count][];
+        for (int k = 0; k < Protocol.Count; k++) { _pose[k] = new float[n]; _stiff[k] = new float[n]; }
+
+        for (int j = 0; j < n; j++)
+        {
+            string s = joints[j].Name;
+            (_pose[Protocol.Stand][j],   _stiff[Protocol.Stand][j])   = Stand(s);
+            (_pose[Protocol.Recover][j], _stiff[Protocol.Recover][j]) = Recover(s);
+            (_pose[Protocol.Getup][j],   _stiff[Protocol.Getup][j])   = Curl(s);
+        }
+    }
+
+    static (float, float) Stand(string s) =>
+        s.StartsWith("hip")      ? (-0.05f, 1.0f) :
+        s.StartsWith("knee")     ? ( 0.10f, 1.0f) :
+        s.StartsWith("ankle")    ? (-0.05f, 1.0f) :
+        s == "lumbar"            ? ( 0.00f, 0.8f) :
+        s == "thoracic"          ? ( 0.00f, 0.8f) :
+        s.StartsWith("shoulder") ? (-0.15f, 0.4f) :
+        s.StartsWith("elbow")    ? (-0.30f, 0.4f) :
+        s == "neck"              ? ( 0.00f, 0.6f) : (0f, 0.5f);
+
+    static (float, float) Recover(string s) =>
+        s.StartsWith("shoulder") ? (-0.9f, 0.6f) :
+        s.StartsWith("elbow")    ? (-0.5f, 0.5f) : Stand(s);
+
+    static (float, float) Curl(string s) =>
+        s.StartsWith("hip")      ? (-0.9f, 0.15f) :
+        s.StartsWith("knee")     ? ( 1.3f, 0.15f) :
+        s.StartsWith("ankle")    ? ( 0.3f, 0.10f) :
+        s == "lumbar"            ? ( 0.4f, 0.15f) :
+        s == "thoracic"          ? ( 0.3f, 0.15f) :
+        s.StartsWith("shoulder") ? (-1.0f, 0.10f) :
+        s.StartsWith("elbow")    ? (-1.2f, 0.10f) :
+        s == "neck"              ? ( 0.3f, 0.10f) : (0f, 0.1f);
+
+    public void Tick(Brain b, float dt)
+    {
+        for (int j = 0; j < b.MotorTarget.Length; j++)
+        {
+            float t = 0f, s = 0f;
+            for (int k = 0; k < Protocol.Count; k++)
+            {
+                float p = b.P[k];
+                if (p < 1e-4f) continue;
+                t += p * _pose[k][j];
+                s += p * _stiff[k][j];
+            }
+            b.MotorTarget[j] = t;
+            b.MotorStiff[j] = s;
+        }
+    }
+}
+```
+</details>
+
+<details>
+<summary><b><code>BrainPanel.cs</code></b> (замена: общая боль и боль по суставам)</summary>
+
+```csharp
+using Godot;
+using System;
+
+public partial class BrainPanel : Control
+{
+    public Ragdoll Girl;
+    public LobeKind Selected = LobeKind.Motor;
+    public string Message = "";
+    public float MessageTime;
+
+    public static readonly LobeKind[] Order =
+        { LobeKind.Firmware, LobeKind.Vestibular, LobeKind.Reflex, LobeKind.Arbiter, LobeKind.Motor };
+
+    static readonly Color Dim = new(0.6f, 0.62f, 0.7f), Off = new(0.35f, 0.36f, 0.42f),
+                          Booting = new(0.95f, 0.8f, 0.25f), On = new(0.35f, 0.95f, 0.55f),
+                          Cold = new(0.35f, 0.6f, 1f), Warm = new(1f, 0.6f, 0.15f), Burn = new(1f, 0.2f, 0.15f),
+                          PainC = new(1f, 0.3f, 0.5f);
+
+    public override void _Ready() { MouseFilter = MouseFilterEnum.Ignore; Position = new Vector2(10, 10); }
+
+    public override void _Process(double d)
+    {
+        if (MessageTime > 0) MessageTime -= (float)d;
+        QueueRedraw();
+    }
+
+    void Text(float x, float y, string s, Color c, int size = 12)
+        => DrawString(ThemeDB.FallbackFont, new Vector2(x, y), s, HorizontalAlignment.Left, -1, size, c);
+
+    void Bar(float x, float y, float w, float v, Color c)
+    {
+        DrawRect(new Rect2(x, y - 8, w, 7), new Color(1, 1, 1, 0.08f));
+        DrawRect(new Rect2(x, y - 8, w * Math.Clamp(v, 0f, 1f), 7), c);
+    }
+
+    static Color Health(float h) => h > 0.6f ? Dim : h > 0f ? Warm : Burn;
+
+    static string ModeName(DamageMode m) => m switch
+    {
+        DamageMode.Off => "ВЫКЛ (идеальное тело)",
+        DamageMode.Frozen => "ЗАМОРОЖЕН",
+        _ => "ВКЛ",
+    };
+
+    public override void _Draw()
+    {
+        DrawRect(new Rect2(0, 0, 470, 680), new Color(0.02f, 0.03f, 0.05f, 0.7f));
+        float y = 20;
+        Text(10, y, "МОЗГ", Colors.White, 14);
+        if (Girl == null || !IsInstanceValid(Girl) || Girl.Brain == null)
+        {
+            Text(10, y + 24, "тела нет · [R] заново", Burn);
+            return;
+        }
+        var b = Girl.Brain;
+        var d = Girl.Dur;
+        var n = Girl.Nerves;
+
+        y += 6;
+        for (int i = 0; i < Order.Length; i++)
+        {
+            var s = b.Slots[(int)Order[i]];
+            y += 24;
+            var col = s.Chip == null ? Off : s.Boot < 1f ? Booting : On;
+            var r = new Rect2(8, y - 16, 454, 22);
+            DrawRect(r, new Color(col, 0.15f));
+            if (Order[i] == Selected) DrawRect(r, Colors.White, false, 1.5f);
+            DrawCircle(new Vector2(19, y - 5), 4f, col);
+            Text(30, y, $"{i + 1} {s.Title}", Colors.White);
+            string label = s.Chip == null ? "— пусто —"
+                         : s.Boot < 1f ? $"{s.Chip.Label} {s.Boot:P0}" : s.Chip.Label;
+            Text(165, y, label, col);
+            Text(430, y, $"{s.Hz:0}", Dim, 10);
+        }
+
+        y += 30;
+        string st = b.Slots[(int)LobeKind.Arbiter].Chip is ArbiterRom a ? a.StateName : "заклинило";
+        Text(10, y, $"Протокол: {st}", Colors.White);
+        for (int k = 0; k < 4; k++)
+        {
+            y += 16;
+            Text(18, y, Protocol.Names[k], Dim, 11);
+            Bar(100, y, 200, b.P[k], On);
+        }
+
+        y += 24;
+        var bl = b.Balance;
+        string pose = bl[Bal.Lying] > 0.5f ? "ЛЕЖИТ" : bl[Bal.Support] > 0.5f ? "на ногах" : "нет опоры";
+        Text(10, y, $"Запас ξ: {bl[Bal.Margin] * Ragdoll.RefHeight:+0;-0} px   {pose}", Colors.White);
+
+        y += 20;
+        float pain = n?.Total[0] ?? 0f;
+        Text(10, y, "Боль", pain > 0.3f ? PainC : Dim);
+        Bar(60, y, 160, pain, PainC);
+
+        y += 20;
+        Text(10, y, $"Износ: {ModeName(d.Mode)}", d.Mode == DamageMode.Live ? Warm : Dim);
+        Text(230, y, "хладагент", Dim, 11);
+        Bar(295, y, 120, d.Coolant, d.Coolant > 0.3f ? Cold : Burn);
+
+        y += 24;
+        Text(10, y, "Сустав", Dim, 11); Text(145, y, "°C", Dim, 11); Text(175, y, "R", Dim, 11);
+        Text(210, y, "ток", Dim, 11);   Text(262, y, "упор", Dim, 11); Text(302, y, "изол", Dim, 11);
+        Text(342, y, "боль", Dim, 11);
+        for (int j = 0; j < Girl.Temp.Length; j++)
+        {
+            y += 15;
+            float T = Girl.Temp[j];
+            float t = (T - Girl.Ambient) / (Girl.CritTemp - Girl.Ambient);
+            var c = t < 1f ? Cold.Lerp(Warm, Math.Clamp(t, 0f, 1f)) : Burn;
+            float stop = 1f - d.StopWear[j], ins = d.Insulation[j];
+
+            Text(10, y, Girl.Def.Joints[j].Name, Dim, 11);
+            Bar(85, y, 55, t, c);
+            Text(145, y, $"{T:0}", c, 11);
+            Text(175, y, $"{Girl.Resistance(j):0.00}", Girl.Damage[j] > 0.05f ? Burn : Dim, 11);
+            Bar(210, y, 45, Math.Abs(Girl.Current[j]) / Girl.SupplyVoltage, Warm);
+            Text(262, y, stop <= 0f ? "СЛОМ" : $"{stop:P0}", Health(stop), 11);
+            Text(302, y, $"{ins:P0}", Health(ins - 0.4f), 11);
+
+            if (d.Effects && d.CableCut[j]) Text(342, y, "онем.", Off, 11);
+            else if (n != null) Bar(342, y, 35, n.Pain[j], PainC);
+
+            string flags = (d.ShortTime[j] > 0f ? "КЗ " : "") + (d.HoseTorn[j] ? "Т " : "") + (d.CableCut[j] ? "X " : "");
+            if (Math.Abs(d.Twist[j]) > 0.05f) flags += $"{d.Twist[j]:+0.0;-0.0}об";
+            if (flags.Length > 0) Text(382, y, flags, Burn, 11);
+        }
+
+        y += 22;
+        if (MessageTime > 0) Text(10, y, "» " + Message, Booting);
+        y += 20; Text(10, y, "[1-5] слот  [Space] вынуть/вставить  [Tab] другой чип", Dim, 11);
+        y += 16; Text(10, y, "[ЛКМ] тащить  [Q/E] толкнуть  [G] гироскоп  [D] схема", Dim, 11);
+        y += 16; Text(10, y, "[K] режим износа  [J] состарить упоры  [H] полный ремонт  [R] заново", Dim, 11);
+    }
+}
