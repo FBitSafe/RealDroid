@@ -12,7 +12,7 @@ if not "%~2"=="" set CHIPARG=--chip %~2
 if /i "%~3"=="nogit" set NOGIT=1
 
 echo.
-echo Сон RECOVER, поколений: %GENS%. Не закрывайте окно. Отключите спящий режим.
+echo Son RECOVER, pokolenij: %GENS%. Ne zakryvaite okno. Otklyuchite spyashij rezhim.
 echo.
 
 "%GODOT%" --headless --fixed-fps 30 --path . res://Dream.tscn -- --gens %GENS% --sector RECOVER --min-level 0.3 %CHIPARG%
@@ -20,15 +20,15 @@ echo.
 if defined NOGIT goto :end
 
 echo.
-echo Отправляю лог в GitHub...
+echo Otpravlyayu log v GitHub...
 git add Diagnostics/DreamLogs
 git commit -m "Dream RECOVER %GENS% gens log"
 if errorlevel 1 (
-    echo Не удалось отправить лог в GitHub, отправьте вручную.
+    echo Ne udalos otpravit log v GitHub, otpravte vruchnuyu.
     goto :end
 )
 git push
-if errorlevel 1 echo Не удалось отправить лог в GitHub, отправьте вручную.
+if errorlevel 1 echo Ne udalos otpravit log v GitHub, otpravte vruchnuyu.
 
 :end
 echo.
