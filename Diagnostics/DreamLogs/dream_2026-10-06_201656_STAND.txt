@@ -1,0 +1,60 @@
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=1.00 дребезг=0 колено=0.11 удар=0
+gen  135  STAND  exam 1.380 (2/2) pose 99 %  replay 3.786    CP step 0 %  mean 2.755  best 3.273  390 t/s  ★
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.14 удар=0
+gen  136  STAND  exam 1.374 (2/2) pose 98 %  replay 3.786    CP step 0 %  mean 2.220  best 3.273  396 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.15 удар=0
+gen  137  STAND  exam 1.367 (2/2) pose 97 %  replay 3.785    CP step 0 %  mean 2.557  best 3.273  377 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.15 удар=0
+gen  138  STAND  exam 1.364 (2/2) pose 97 %  replay 3.784    CP step 0 %  mean 2.392  best 3.273  385 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.15 удар=0
+gen  139  STAND  exam 1.360 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.264  best 3.273  394 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+gen  140  STAND  exam 1.357 (2/2) pose 96 %  replay 3.782    CP step 0 %  mean 3.472  best 3.273  380 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+gen  141  STAND  exam 1.355 (2/2) pose 96 %  replay 3.782    CP step 0 %  mean 2.789  best 3.273  375 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.98 дребезг=0 колено=0.14 удар=0
+gen  142  STAND  exam 1.357 (2/2) pose 96 %  replay 3.783    CP step 0 %  mean 2.099  best 3.273  397 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+gen  143  STAND  exam 1.362 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.319  best 3.273  388 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.15 удар=0
+gen  144  STAND  exam 1.363 (2/2) pose 97 %  replay 3.782    CP step 0 %  mean 3.155  best 3.273  393 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=4 колено=0.13 удар=1
+gen  145  STAND  exam 1.368 (2/2) pose 98 %  replay 3.784    CP step 0 %  mean 2.868  best 3.273  368 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=2 колено=0.12 удар=0
+gen  146  STAND  exam 1.371 (2/2) pose 98 %  replay 3.785    CP step 0 %  mean 2.482  best 3.273  368 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.11 удар=0
+gen  147  STAND  exam 1.373 (2/2) pose 98 %  replay 3.786    CP step 0 %  mean 2.338  best 3.273  383 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.11 удар=0
+gen  148  STAND  exam 1.373 (2/2) pose 98 %  replay 3.785    CP step 0 %  mean 3.150  best 3.273  368 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.10 удар=0
+gen  149  STAND  exam 1.373 (2/2) pose 98 %  replay 3.785    CP step 0 %  mean 2.475  best 3.273  385 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.10 удар=0
+gen  150  STAND  exam 1.373 (2/2) pose 98 %  replay 3.784    CP step 0 %  mean 2.636  best 3.273  377 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.10 удар=0
+gen  151  STAND  exam 1.371 (2/2) pose 98 %  replay 3.784    CP step 0 %  mean 3.089  best 3.273  383 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.10 удар=0
+gen  152  STAND  exam 1.369 (2/2) pose 98 %  replay 3.784    CP step 0 %  mean 1.781  best 3.273  381 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.11 удар=0
+gen  153  STAND  exam 1.366 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.707  best 3.273  383 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.10 удар=0
+gen  154  STAND  exam 1.361 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.207  best 3.273  390 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.10 удар=0
+gen  155  STAND  exam 1.359 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.977  best 3.273  392 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+gen  156  STAND  exam 1.358 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.112  best 3.273  399 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+gen  157  STAND  exam 1.359 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.495  best 3.273  395 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+gen  158  STAND  exam 1.357 (2/2) pose 97 %  replay 3.782    CP step 0 %  mean 2.814  best 3.273  384 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+gen  159  STAND  exam 1.356 (2/2) pose 96 %  replay 3.782    CP step 0 %  mean 2.981  best 3.273  385 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+gen  160  STAND  exam 1.356 (2/2) pose 96 %  replay 3.782    CP step 0 %  mean 2.348  best 3.273  377 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+gen  161  STAND  exam 1.360 (2/2) pose 97 %  replay 3.782    CP step 0 %  mean 2.325  best 3.273  372 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.99 дребезг=0 колено=0.14 удар=0
+gen  162  STAND  exam 1.363 (2/2) pose 97 %  replay 3.782    CP step 0 %  mean 2.647  best 3.273  366 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.99 дребезг=0 колено=0.14 удар=0
+gen  163  STAND  exam 1.365 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.484  best 3.273  361 t/s
+  exam0 толчок 0% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.14 удар=0
+gen  164  STAND  exam 1.364 (2/2) pose 97 %  replay 3.783    CP step 0 %  mean 2.917  best 3.273  363 t/s

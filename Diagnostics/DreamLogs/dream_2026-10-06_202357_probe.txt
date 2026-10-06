@@ -1,0 +1,32 @@
+probe START seconds=60 motor=nn chip=MOTOR NN generation=136 standMaturity=0.988 nonzeroWeights=3630/4170 path=C:/Users/fbits/AppData/Roaming/Godot/app_userdata/RealAndroid/chips/motor_nn.chip wear=off gyro=on pristine=yes
+probe t=2.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.014 margin=0.12 поза=1.00 Tmax=25.0(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=4.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.0(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=6.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.0(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=8.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.0(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=10.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.0(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=12.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=14.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=16.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=18.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=20.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=22.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=24.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=26.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=28.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=30.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=32.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=34.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=36.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=38.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=40.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=42.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=44.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=46.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=48.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=50.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=52.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=54.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=56.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=58.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px
+probe END t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px reason=time

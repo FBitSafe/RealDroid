@@ -1,5 +1,10 @@
 # Changelog
 
+## Fix018
+- `tools/godot.ps1` created. Bug found: PowerShell strips bare `--`; workaround is quoting as `'--'`. All ARCHITECTURE.md commands updated.
+- Fix017 partial-application bug corrected: `CpStepFadeGenerations` was still 100, `CapturePointAssistForGeneration` still returned `0f`, startup log block misindented. All fixed.
+- All Fix017 §6 checks run and passed. Results in Diagnostics013.txt.
+
 ## Fix017
 - CP-step assist: `CpStepFadeGenerations` default `100 → 0` (no fade); `CapturePointAssistForGeneration` returns `1f` when `<= 0`; startup log says `100% (no fade)`.
 - Swing-leg reflex protection: `DoNotTouchSwingingLeg` default `false → true`; `MakeRun` sets `!_allowSwingLegReflex` unconditionally (was gated on `_protocolTest`).

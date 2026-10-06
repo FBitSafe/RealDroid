@@ -1,0 +1,44 @@
+```markdown
+# Fix018 — дополнение к Fix017: найти Godot и выполнить проверки §6 из Fix017
+
+Путь к Godot (если пусто — найди сам): "C:\Users\fbits\OneDrive\Desktop\Godot.NET\Godot_v4.7.2-stable_mono_win64_console.exe"
+
+## 1. Найти Godot
+Если путь выше пуст — ищи `Godot_v4*_mono_win64_console.exe` (PowerShell), по порядку, остановись на первом найденном:
+- `where.exe Godot_v4.7.2-stable_mono_win64_console.exe`
+- `Get-ChildItem -Path $env:USERPROFILE, "C:\Program Files", "C:\Godot", "D:\" -Recurse -Filter "Godot_v4*_console.exe" -ErrorAction SilentlyContinue | Select-Object -First 5 FullName`
+- Если не найден — СТОП, в отчёте напиши «Godot не найден» и какие команды выполнял. Ничего не скачивай.
+
+## 2. Записать путь, чтобы больше не терять
+- Создай `tools/godot.ps1`: `& "<полный путь>" @args` (одна строка).
+- В `ARCHITECTURE.md` (раздел «Сборка и проверка») замени `godot` на `./tools/godot.ps1` во всех командах и добавь строку: «Godot: <полный путь>. Агент запускает проверки сам после каждого Fix».
+
+## 3. Выполнить проверки (из корня проекта)
+`dotnet build "New Game Project.sln"` — затем по очереди:
+1. `./tools/godot.ps1 --headless --fixed-fps 30 --path . res://Dream.tscn -- --sector RECOVER --motor-rom-step-test --levels 0.5,0.6,0.7`
+2. то же + `--hip-upper 0.7`
+3. `... -- --probe 60 --motor rom --wear off --gyro off`
+4. `... -- --probe 60 --motor nn --wear off --gyro on`
+5. `... -- --sector RECOVER --gens 2 --min-level 0.3 --chip user://chips/test.chip --fresh` — проверь в выводе `100% (no fade)` и `CP step 100%`, выпиши скорость (t/s или время поколения). Затем удали `test.chip` (`%APPDATA%\Godot\app_userdata\RealAndroid\chips\test.chip`).
+6. Проверь, что появился файл в `Diagnostics/DreamLogs/` (зеркало лога). Если нет — найди причину и исправь.
+
+## 4. Отчёт и git
+- Допиши в `Diagnostics/Diagnostics013.txt` раздел «Fix018: проверки»: найденный путь, **дословный** вывод прогонов 1–2 (все строки `exam…`, `ROM step exam…`, `ROMSTEP…`), для 3–4 итоговые строки пробы, для 5 стартовый лог + строки `gen`, результат п.6.
+- Ничего в коде кроме п.2 и возможной починки п.6 не менять.
+- `git add -A`, `git commit -m "Fix018: Godot path, Fix017 checks run"`, `git push`.
+```
+
+<details>
+<summary><b>Что я проверил в Fix017 сам</b></summary>
+
+- **Боль.** Удар в упор теперь обычная боль, разрыв трубки острая. Сломанный сустав за пределом ноет, пока не двигается, и даёт острую боль, если им шевелить. Сделано точно по спецификации.
+- **Защита маховой ноги** теперь включена везде: во сне, в игре и в пробе. Нигде в коде её не выключают обратно.
+- **Помощь шагу:** все 100%, затухания нет.
+- **Резервная копия чипа** делается перед каждым сном.
+
+**Чего жду от тестов (оценка):**
+- 50% снова 4/4. Возможно, удар стопы станет мягче, потому что защита ноги осталась прежней, а изменилась только боль.
+- На 70% девочка больше не должна «цепенеть» от удара позвоночником. Перейдёт ли она от этого в «устояла», пока не знаю.
+- С `--hip-upper 0.7`, надеюсь, станет лучше при толчке в грудь, когда шаг делается назад.
+
+</details>

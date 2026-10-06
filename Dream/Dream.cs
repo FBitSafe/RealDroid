@@ -1,9 +1,4 @@
 using Godot;
-
-
-
-
-
 using System;
 using System.Collections.Generic;
 
@@ -20,7 +15,7 @@ public partial class Dream : Node2D
     [Export] public float ReplayFloor = 0.6f;
     [Export] public float GyroOffShare = 0.3f;
     [Export] public int MaxGenerations = 0;
-    [Export] public int CpStepFadeGenerations = 100;
+    [Export] public int CpStepFadeGenerations = 0;   // 0 = no fade (full assist always); >0 = fade over N Recover generations; use --no-cp-step to disable entirely
     [Export] public bool UseDamage = true;
 
     const uint CloneLayer = 1u << 5;
@@ -196,28 +191,33 @@ public partial class Dream : Node2D
 
         GD.Print($"Сектор {Protocol.Names[_sector]}, общие веса x{_shared:F2}, повторение: {_replay.Count}, " +
                  $"травмы: {(UseDamage && DreamJob.Damage != null ? "да (Frozen)" : "нет")}");
-        if (_protocolTest)
+                if (_protocolTest)
             GD.Print($"ROM test, levels={(_protocolLevels == null ? (_main as RecoverTask)?.Status : string.Join(",", _protocolLevels))}; " +
                      "neural weights will not be used or saved.");
         else
-            GD.Print($"MOTOR ROM capture-point stepping: {(_disableCapturePointStepping ? "OFF" : $"{CapturePointAssistForGeneration():P0} now, fade over {CpStepFadeGenerations} Recover generations")}; " +
-                     $"сохраняю в {ProjectSettings.GlobalizePath(_chipPath)}");
-            // Резервная копия чипа перед началом обучения
-            if (!_probeMode && !_protocolTest && !_fresh && FileAccess.FileExists(_chipPath))
-            {
-                string backupDir = _chipPath.GetBaseDir() + "/backup";
-                DirAccess.MakeDirRecursiveAbsolute(backupDir);
-                string stamp = Time.GetDatetimeStringFromSystem().Replace(':', '-').Replace(' ', '_');
-                string backupName = _chipPath.GetFile().GetBaseName()
-                    + $"_g{_chip.Generation:D4}_{stamp}.chip";
-                string backupPath = backupDir + "/" + backupName;
-                DirAccess.CopyAbsolute(
-                    ProjectSettings.GlobalizePath(_chipPath),
-                    ProjectSettings.GlobalizePath(backupPath));
-                GD.Print($"Backup: {ProjectSettings.GlobalizePath(backupPath)}");
-            }
-            DreamLog.Begin(Protocol.Names[_sector]);
-            StartGeneration();
+        {
+            string cpStepDesc = _disableCapturePointStepping ? "OFF"
+                : CpStepFadeGenerations <= 0 ? "100% (no fade)"
+                : $"{CapturePointAssistForGeneration():P0} now, fade over {CpStepFadeGenerations} Recover generations";
+            GD.Print($"MOTOR ROM capture-point stepping: {cpStepDesc}; сохраняю в {ProjectSettings.GlobalizePath(_chipPath)}");
+        }
+
+        // Резервная копия чипа перед началом обучения
+        if (!_probeMode && !_protocolTest && !_fresh && FileAccess.FileExists(_chipPath))
+        {
+            string backupDir = _chipPath.GetBaseDir() + "/backup";
+            DirAccess.MakeDirRecursiveAbsolute(backupDir);
+            string stamp = Time.GetDatetimeStringFromSystem().Replace(':', '-').Replace(' ', '_');
+            string backupName = _chipPath.GetFile().GetBaseName()
+                + $"_g{_chip.Generation:D4}_{stamp}.chip";
+            string backupPath = backupDir + "/" + backupName;
+            DirAccess.CopyAbsolute(
+                ProjectSettings.GlobalizePath(_chipPath),
+                ProjectSettings.GlobalizePath(backupPath));
+            GD.Print($"Backup: {ProjectSettings.GlobalizePath(backupPath)}");
+        }
+        DreamLog.Begin(Protocol.Names[_sector]);
+        StartGeneration();
     }
 
     void StartGeneration()
@@ -324,7 +324,7 @@ public partial class Dream : Node2D
 
     float CapturePointAssistForGeneration()
     {
-        if (CpStepFadeGenerations <= 0) return 0f;
+        if (CpStepFadeGenerations <= 0) return 1f;   // 0 = no fade, always 100% assist
         int recoverGeneration = _chip.SectorGen[Protocol.Recover];
         if (_sector == Protocol.Recover)
             recoverGeneration += Math.Max(0, _gen - _startGen);
