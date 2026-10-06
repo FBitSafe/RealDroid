@@ -67,9 +67,16 @@ public partial class Dream : Node2D
     DreamScoreGraph _penaltyGraph, _rewardGraph;
     Camera2D _cam;
     Run _examRun;
-    int _lastGenTicks, _failBroken, _failHead, _failTilt, _quickGens;
+        int _lastGenTicks, _failBroken, _failHead, _failTilt, _quickGens;
     ulong _rateT0; int _rateTicks; float _rate;
     float _scoreUiTimer;
+    ulong _genT0;                          // wall-clock start of current generation (ms)
+    ulong _dreamT0;                        // wall-clock start of entire dream (ms)
+    readonly float[] _recentGenSec = new float[5];  // ring buffer, last 5 gen durations
+    int _recentIdx;                        // next write position
+    int _recentFilled;                     // how many entries filled so far
+    float _bestExam = float.MinValue;      // best exam score seen, for dream END line
+    int _bestExamGen;                      // gen at which best exam was achieved
 
     public override void _Ready()
     {
@@ -217,6 +224,8 @@ public partial class Dream : Node2D
             GD.Print($"Backup: {ProjectSettings.GlobalizePath(backupPath)}");
         }
         DreamLog.Begin(Protocol.Names[_sector]);
+        _dreamT0 = Time.GetTicksMsec();
+        _genT0 = _dreamT0;
         StartGeneration();
     }
 
@@ -500,11 +509,39 @@ public partial class Dream : Node2D
             if (ChipFile.Save(_chipPath, c)) saved = "  ★";
         }
 
+                // --- wall-clock timing ---
+        ulong now = Time.GetTicksMsec();
+        float genSec = (now - _genT0) / 1000f;
+        _genT0 = now;
+        _recentGenSec[_recentIdx] = genSec;
+        _recentIdx = (_recentIdx + 1) % _recentGenSec.Length;
+        if (_recentFilled < _recentGenSec.Length) _recentFilled++;
+        float avgSec = 0f;
+        for (int i = 0; i < _recentFilled; i++) avgSec += _recentGenSec[i];
+        avgSec /= _recentFilled;
+        string etaStr = "";
+        if (MaxGenerations > 0)
+        {
+            int remaining = MaxGenerations - (_gen - _startGen);
+            float etaSec = avgSec * remaining;
+            etaStr = $" | {genSec:F0}s/gen ETA {(int)(etaSec / 3600):D2}:{(int)(etaSec % 3600 / 60):D2}";
+        }
+
+        // track best exam
+        if (_exam > _bestExam) { _bestExam = _exam; _bestExamGen = _gen; }
+
         DreamLog.Line($"gen {_gen,4}  {Protocol.Names[_sector]}  exam {_exam:F3} ({_examOk}/{_examTotal}) pose {_examQ:P0}" +
                       (nr > 0 ? $"  replay {_replayScore:F3}" : "") +
-                      $"  {level}  CP step {stepAssist:P0}  mean {_mean:F3}  best {_best:F3}  {_rate:F0} t/s{saved}");
+                      $"  {level}  CP step {stepAssist:P0}  mean {_mean:F3}  best {_best:F3}  {_rate:F0} t/s{saved}{etaStr}");
 
-        if (_headless && MaxGenerations > 0 && _gen - _startGen >= MaxGenerations) { GetTree().Quit(); return; }
+        if (_headless && MaxGenerations > 0 && _gen - _startGen >= MaxGenerations)
+        {
+            ulong totalMs = Time.GetTicksMsec() - _dreamT0;
+            int th = (int)(totalMs / 3600000), tm = (int)(totalMs % 3600000 / 60000), ts = (int)(totalMs % 60000 / 1000);
+            DreamLog.Line($"dream END gens={_gen - _startGen} total={th:D2}:{tm:D2}:{ts:D2} best exam={_bestExam:F3} (gen {_bestExamGen})");
+            GetTree().Quit();
+            return;
+        }
         StartGeneration();
     }
 

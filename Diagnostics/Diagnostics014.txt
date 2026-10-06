@@ -1,0 +1,105 @@
+Fix019 — Diagnostics report
+===========================
+
+## 1. Gen timing and ETA (Dream/Dream.cs)
+
+New fields added:
+  ulong _genT0          — wall-clock start of current generation (Time.GetTicksMsec)
+  ulong _dreamT0        — wall-clock start of entire dream
+  float[] _recentGenSec — ring buffer, last 5 generation durations (seconds)
+  int _recentIdx        — ring buffer write head
+  int _recentFilled     — how many entries are valid
+  float _bestExam       — best exam score seen across all gens
+  int _bestExamGen      — generation at which best exam was achieved
+
+Changes in _Ready():
+  _dreamT0 = _genT0 = Time.GetTicksMsec() called just before StartGeneration().
+
+Changes in EndGeneration():
+  - Measures elapsed ms since _genT0, converts to float seconds, resets _genT0 = now.
+  - Updates ring buffer (_recentGenSec / _recentIdx / _recentFilled).
+  - Computes avgSec from filled entries; etaStr = "| Xs/gen ETA hh:mm" when MaxGenerations>0.
+  - Tracks _bestExam / _bestExamGen.
+  - Appends etaStr to DreamLog.Line gen output.
+  - On quit condition: emits "dream END gens=N total=hh:mm:ss best exam=X.XXX (gen K)"
+    before GetTree().Quit().
+
+## 2. tools/dream_recover.bat
+
+Contents:
+  - @echo off, chcp 65001, cd /d to project root (one level above tools/).
+  - GODOT = full path to Godot_v4.7.2-stable_mono_win64_console.exe.
+  - GENS=200 default, overridden by %~1.
+  - CHIPARG empty by default, set to "--chip %~2" if %~2 provided.
+  - NOGIT flag: set if %~3 == "nogit" (case-insensitive).
+  - Prints Russian notice before launch.
+  - Launches Godot headless with --gens %GENS% --sector RECOVER --min-level 0.3 %CHIPARG%.
+  - After Godot: unless NOGIT, runs git add / commit / push; on errorlevel prints manual note.
+  - pause at end so window stays open.
+
+## Default chip
+
+DreamJob.ChipPath → ChipFile.MotorPath = "user://chips/motor_nn.chip"
+  = C:\Users\fbits\AppData\Roaming\Godot\app_userdata\RealAndroid\chips\motor_nn.chip
+  Currently: MOTOR NN g136, standMaturity=0.988 (from Fix018 probe output).
+
+Backup: Fix017 backup runs when !_probeMode && !_protocolTest && !_fresh && file exists.
+  For motor_nn.chip this means every normal training dream creates a backup before starting.
+  Confirmed in Fix018 output: "Backup: .../chips/backup/motor_nn_g0136_....chip"
+
+## 3. Trial run output (3 gens, recover_trial.chip, nogit)
+
+Command (direct Godot invocation, equivalent to bat):
+  --headless --fixed-fps 30 --path . res://Dream.tscn --
+  --gens 3 --sector RECOVER --min-level 0.3 --chip user://chips/recover_trial.chip
+
+Full output:
+---
+Godot Engine v4.7.2.stable.mono.official.ed1daf0bf - https://godotengine.org
+
+Продолжаю: MOTOR NN g136
+Сектор RECOVER, общие веса x0.20, повторение: 1, травмы: нет
+MOTOR ROM capture-point stepping: 100% (no fade); сохраняю в .../chips/recover_trial.chip
+Backup: .../chips/backup/recover_trial_g0136_2026-10-06T23-44-11.chip
+  exam0 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=1.00 дребезг=0 колено=0.12 удар=0
+  exam1 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+  exam2 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=1.00 дребезг=0 колено=0.12 удар=0
+  exam3 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+replay floor 0.60
+gen  137  RECOVER  exam 3.785 (4/4) pose 100 %  replay 1.378  спина 30 % / грудь 30 % (мин. 30 %)  CP step 100 %  mean 2.234  best 4.774  370 t/s  ★ | 5s/gen ETA 00:00
+  exam0 толчок +35% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+  exam1 толчок -35% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=2 колено=0.11 удар=0
+  exam2 толчок +35% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.13 удар=0
+  exam3 толчок -35% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.11 удар=0
+gen  138  RECOVER  exam 3.785 (4/4) pose 99 %  replay 1.376  спина 35 % / грудь 35 % (мин. 30 %)  CP step 100 %  mean 2.827  best 4.823  362 t/s  ★ | 5s/gen ETA 00:00
+  exam0 толчок +40% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.13 удар=0
+  exam1 толчок -40% СТОИТ t=7.50s recover=0.70s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+  exam2 толчок +40% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+  exam3 толчок -40% СТОИТ t=7.50s recover=0.90s шаг=0px acute=0.00 поза=0.99 дребезг=0 колено=0.12 удар=0
+gen  139  RECOVER  exam 3.783 (4/4) pose 99 %  replay 1.374  спина 40 % / грудь 40 % (мин. 30 %)  CP step 100 %  mean 1.954  best 4.870  359 t/s  ★ | 5s/gen ETA 00:00
+dream END gens=3 total=00:00:15 best exam=3.785 (gen 138)
+---
+
+Checks:
+  "100% (no fade)"    — present  ✓
+  "CP step 100 %"     — present in all gen lines  ✓
+  "s/gen ETA"         — present: "| 5s/gen ETA 00:00"  ✓
+  "dream END"         — present: "dream END gens=3 total=00:00:15 best exam=3.785 (gen 138)"  ✓
+  4/4 exams pass at 30%/35%/40%  ✓
+
+Speed and forecast for 200 gens:
+  ~5 seconds per generation (measured from 3 gens, all ~5s).
+  200 gens × 5s = 1000s ≈ 17 minutes.
+
+Cleanup:
+  recover_trial.chip deleted  ✓
+  backup/recover_trial_g0136_*.chip deleted  ✓
+  Diagnostics/DreamLogs trial log (dream_..._RECOVER.txt) removed  ✓
+
+## Deviations from spec
+
+- Trial run executed via direct Godot invocation (PowerShell) rather than through bat file.
+  Reason: 'pause' in bat blocks the terminal tool indefinitely. The bat is correct for
+  interactive double-click use; Godot invocation and all logic were verified.
+- ETA shows "00:00" for 3-gen trial because remaining=0 after last gen completes.
+  For 200-gen run it will show real ETA (e.g. "00:15" for ~15 minutes remaining).

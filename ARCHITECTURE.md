@@ -68,6 +68,10 @@ dotnet build "New Game Project.sln"
 Тестовый чип после проверки удалять. Игровые чипы: `%APPDATA%\Godot\app_userdata\RealAndroid\chips\`.
 Логи сна: `%APPDATA%\Godot\app_userdata\RealAndroid\logs\` и зеркало `res://Diagnostics/DreamLogs/` (только при запуске из проекта).
 
+**Ночной сон:** `tools\dream_recover.bat [поколений] [чип] [nogit]`
+По умолчанию 200 поколений, чип `user://chips/motor_nn.chip`. После сна автоматически коммитит и пушит лог.
+Пример пробного прогона (3 поколения, без git): `tools\dream_recover.bat 3 user://chips/recover_trial.chip nogit`
+
 ## Известные кандидаты на дальнейший рефакторинг (поведение не менялось)
 
 - `Dream/Dream.cs` (~560 строк): поля пробы и протокольного теста можно вынести в отдельные partial-файлы или классы.

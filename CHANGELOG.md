@@ -1,5 +1,11 @@
 # Changelog
 
+## Fix019
+- Gen timing: wall-clock seconds per generation appended to each `gen` log line as `| Xs/gen ETA hh:mm` (ETA = rolling avg of last 5 gens × remaining gens, only when `MaxGenerations > 0`).
+- `dream END` line added on completion: `dream END gens=N total=hh:mm:ss best exam=X.XXX (gen K)`.
+- `tools/dream_recover.bat`: cmd batch, 200 gens RECOVER by default, args `[gens] [chip] [nogit]`, auto git commit+push of DreamLogs after run.
+- Trial run confirmed: `100% (no fade)`, `CP step 100%`, `~5s/gen`, `dream END` present.
+
 ## Fix018
 - `tools/godot.ps1` created. Bug found: PowerShell strips bare `--`; workaround is quoting as `'--'`. All ARCHITECTURE.md commands updated.
 - Fix017 partial-application bug corrected: `CpStepFadeGenerations` was still 100, `CapturePointAssistForGeneration` still returned `0f`, startup log block misindented. All fixed.

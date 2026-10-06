@@ -1,0 +1,33 @@
+# Fix019 — запуск ночного сна RECOVER: bat-файл, время/ETA в логе, пробный прогон
+
+Правила как раньше: якоря — ориентиры; при той же логике продолжай и укажи «ожидалось / найдено / сделано». Долгий сон НЕ запускать.
+
+## 1. Время и ETA в строке поколения (Dream/Dream.cs)
+- Найди место, где печатается строка `gen N RECOVER ... t/s` (и аналогичная для STAND).
+- Засеки реальное время поколения (System.Diagnostics.Stopwatch или Time.GetTicksMsec, НЕ игровое время).
+- В конец строки добавь: `| 95s/gen ETA 05:12` — секунды на последнее поколение и оценка до конца (среднее по последним 5 поколениям × оставшиеся поколения, формат чч:мм).
+- В самом конце сна добавь строку `dream END gens=N total=чч:мм:сс best exam=... (gen K)`.
+
+## 2. Файл запуска tools/dream_recover.bat
+Используй cmd, а не PowerShell (PowerShell съедает `--`). Содержимое по смыслу:
+- `@echo off`, `chcp 65001 >nul`, `cd /d` в корень проекта (папка выше `tools`).
+- Переменная GODOT = `C:\Users\fbits\OneDrive\Desktop\Godot.NET\Godot_v4.7.2-stable_mono_win64_console.exe`.
+- Переменная GENS: по умолчанию 200, но если bat запущен с аргументом — взять его (`if not "%~1"=="" set GENS=%~1`).
+- Переменная CHIPARG: пусто по умолчанию; если передан второй аргумент — `--chip %~2`.
+- Запуск: `"%GODOT%" --headless --fixed-fps 30 --path . res://Dream.tscn -- --gens %GENS% --sector RECOVER --min-level 0.3 %CHIPARG%`
+- Перед запуском выведи по-русски: «Сон RECOVER, поколений: N. Не закрывайте окно. Отключите спящий режим.»
+- После завершения: `git add Diagnostics/DreamLogs` → `git commit -m "Dream RECOVER %GENS% gens log"` → `git push`. Если git вернул ошибку — вывести «Не удалось отправить лог в GitHub, отправьте вручную» и не падать.
+- В конце `pause`, чтобы окно не закрылось.
+- Проверь по коду, какой чип используется без `--chip` (ожидаю `user://chips/motor_nn.chip`, сейчас там STAND gen 136, standMaturity 0.988) и что резервная копия из Fix017 делается для него. Напиши в отчёте.
+
+## 3. Пробный прогон (на копии, основной чип не трогать)
+- Скопируй `%APPDATA%\Godot\app_userdata\RealAndroid\chips\motor_nn.chip` → `...\chips\recover_trial.chip`.
+- Запусти из cmd: `tools\dream_recover.bat 3 user://chips/recover_trial.chip`. Для этого прогона git-часть пропусти: добавь в bat третий аргумент `nogit`, который отключает git.
+- Проверь: стартовый лог содержит `100% (no fade)`, строки `gen` содержат `CP step 100 %` и новое `s/gen ETA`, есть строка `dream END`.
+- Удали `recover_trial.chip` и созданную для него резервную копию в `chips/backup/`, если она появилась.
+- Удали из `Diagnostics/DreamLogs/` лог пробного прогона, чтобы не путать его с ночным.
+
+## 4. Отчёт и git
+- `Diagnostics/Diagnostics014.txt`: изменения п.1–2, какой чип по умолчанию, дословный вывод пробного прогона (стартовый лог, все строки `exam` и `gen`, `dream END`), **секунд на поколение и прогноз на 200 поколений**.
+- Обнови `CHANGELOG.md` (Fix018, Fix019) и в `ARCHITECTURE.md` раздел «Сборка и проверка»: «Ночной сон: tools\dream_recover.bat [поколений] [чип] [nogit]».
+- `git add -A`, `git commit -m "Fix019: gen timing/ETA, dream_recover.bat, trial run"`, `git push`.
