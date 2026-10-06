@@ -1,4 +1,9 @@
 using Godot;
+
+
+
+
+
 using System;
 using System.Collections.Generic;
 
@@ -60,6 +65,7 @@ public partial class Dream : Node2D
     IEpisode _probeEpisode;
     float _sharedOverride = -1f, _levelOverride = -1f, _minLevelOverride = -1f;
     bool _protocolTestFinished;
+    float _hipUpperOverride = -1f;
     string _chipPath;
     readonly Random _rng = new(7);
     Label _hud;
@@ -76,7 +82,12 @@ public partial class Dream : Node2D
         if (_headless) OS.LowProcessorUsageModeSleepUsec = 0;
         _sector = DreamJob.Sector;
         _chipPath = DreamJob.ChipPath;
-        ParseArgs();
+                ParseArgs();
+        if (_hipUpperOverride >= 0f && !_protocolTest)
+        {
+            GD.PushError("--hip-upper is only valid together with --motor-rom-step-test.");
+            _probeInvalid = true;
+        }
         if (_probeInvalid)
         {
             GetTree().Quit(1);
@@ -114,10 +125,16 @@ public partial class Dream : Node2D
             ui.AddChild(_rewardGraph);
         }
 
-        _def = RagdollDef.Girl();
+                _def = RagdollDef.Girl();
+        if (_hipUpperOverride >= 0f)
+        {
+            foreach (var jd in _def.Joints)
+                if (jd.Name == "hip_n" || jd.Name == "hip_f")
+                    jd.Upper = _hipUpperOverride;
+        }
         _spec = NeuralMotorChip.SpecFor(_def, Hidden1, Hidden2);
 
-                if (_probeMode)
+        if (_probeMode)
         {
             DreamLog.Begin("probe");
             StartProbe();
@@ -185,6 +202,20 @@ public partial class Dream : Node2D
         else
             GD.Print($"MOTOR ROM capture-point stepping: {(_disableCapturePointStepping ? "OFF" : $"{CapturePointAssistForGeneration():P0} now, fade over {CpStepFadeGenerations} Recover generations")}; " +
                      $"сохраняю в {ProjectSettings.GlobalizePath(_chipPath)}");
+            // Резервная копия чипа перед началом обучения
+            if (!_probeMode && !_protocolTest && !_fresh && FileAccess.FileExists(_chipPath))
+            {
+                string backupDir = _chipPath.GetBaseDir() + "/backup";
+                DirAccess.MakeDirRecursiveAbsolute(backupDir);
+                string stamp = Time.GetDatetimeStringFromSystem().Replace(':', '-').Replace(' ', '_');
+                string backupName = _chipPath.GetFile().GetBaseName()
+                    + $"_g{_chip.Generation:D4}_{stamp}.chip";
+                string backupPath = backupDir + "/" + backupName;
+                DirAccess.CopyAbsolute(
+                    ProjectSettings.GlobalizePath(_chipPath),
+                    ProjectSettings.GlobalizePath(backupPath));
+                GD.Print($"Backup: {ProjectSettings.GlobalizePath(backupPath)}");
+            }
             DreamLog.Begin(Protocol.Names[_sector]);
             StartGeneration();
     }
@@ -268,7 +299,7 @@ public partial class Dream : Node2D
         br.Insert(FirmwareRom.Stock(), true);
         br.Insert(VestibularRom.Stock(), true);
         var reflex = ReflexRom.Stock();
-        reflex.DoNotTouchSwingingLeg = _protocolTest && !_allowSwingLegReflex;
+        reflex.DoNotTouchSwingingLeg = !_allowSwingLegReflex;
         br.Insert(reflex, true);
         br.Insert(task.MakeArbiter(), true);
         IChip motorChip;
@@ -369,10 +400,11 @@ public partial class Dream : Node2D
         float levelDone = _protocolLevels == null
             ? (_main as RecoverTask)?.LevelFwd ?? 0f
             : _protocolLevels[_protocolLevelIndex];
+                string hipUpperStr = _hipUpperOverride >= 0f ? _hipUpperOverride.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) : "default";
         GD.Print($"ROMSTEP level={levelDone:F2} pass={_examOk}/{_examTotal} steps=[{string.Join(",", steps)}] " +
                  $"timeouts=[{string.Join(",", timeouts)}] kneeMax={maxKnee:F2} impactMax={maxImpact:F0} " +
                  $"back={string.Join("/", backStatus)} reach(back={reach?.BackStepMax:F1}px,forward={reach?.FwdStepMax:F1}px) " +
-                 $"swing-leg-reflex-protection={(!_allowSwingLegReflex ? "on" : "off")}.");
+                 $"hipUpper={hipUpperStr} swing-leg-reflex-protection={(!_allowSwingLegReflex ? "on" : "off")}.");
 
         if (_protocolLevels != null && ++_protocolLevelIndex < _protocolLevels.Length)
         {

@@ -1,0 +1,67 @@
+```markdown
+# Fix017 — подготовка ко сну RECOVER: условия сна = условия игры, боль по уровням, A/B предела бедра, служебное
+
+Правила: читай код сам, якоря ниже — ориентиры. Если выражение уже переименовано/вынесено при той же логике — продолжай и в отчёте укажи «ожидалось / найдено / сделано». СТОП только если логика заметно отличается от описанной.
+
+## 1. CP-step assist: без затухания по умолчанию (Dream/Dream.cs, Dream/Dream.Args.cs)
+- `[Export] public int CpStepFadeGenerations = 100;` → `= 0;`
+- `CapturePointAssistForGeneration()`: `if (CpStepFadeGenerations <= 0) return 0f;` → `return 1f;` (0 = затухания нет, помощь 100%). Остальное без изменений.
+- Стартовый лог: если `CpStepFadeGenerations <= 0` и не `--no-cp-step`, печатать `MOTOR ROM capture-point stepping: 100% (no fade)`. Иначе прежний текст.
+- `--cp-step-fade-gens N` оставить, в справке/комментарии: «0 — без затухания (по умолчанию), N>0 — затухание за N поколений; полностью выключить — --no-cp-step».
+
+## 2. Защита маховой ноги — везде, как в тесте
+- `Chips/ReflexRom.cs`: `public bool DoNotTouchSwingingLeg;` → `public bool DoNotTouchSwingingLeg = true;`
+- `Dream/Dream.cs` в `MakeRun`: `reflex.DoNotTouchSwingingLeg = _protocolTest && !_allowSwingLegReflex;` → `reflex.DoNotTouchSwingingLeg = !_allowSwingLegReflex;`
+- grep по проекту `DoNotTouchSwingingLeg` и `ReflexRom.Stock()` / `ReflexRom.Hyper()`: нигде (Main.cs, Probe) не должно сбрасываться в false. Перечисли найденное в отчёте.
+
+## 3. Боль по уровням (Body/Damage/Nociception.cs)
+Добавить поля:
+```csharp
+public float ImpactAche = 1f;            // удар в упор теперь обычная боль
+public float OverAche = 1.5f;            // сломанный сустав за пределом: ноет (на рад)
+public float OverAcute = 2f, OverVel = 2f; // ...и острая при движении (рад/с для полной силы)
+```
+Изменения в `Tick`:
+- Удар в упор (блок `if (into > ImpactSpeed)`): было `xr += x; lr += x;` → стало `ar += ImpactAche * x; lr += x;` (Side без изменений).
+- Разрыв трубки: `if (hose && !_wasHose[j]) ar += HoseJolt;` → `xr += HoseJolt;`
+- Сломанный упор: сейчас при `broken` вся ветка края хода пропускается. Добавить `else`-ветку к `if (!broken)`:
+```csharp
+else if (edge < 0f)
+{
+    float over = -edge;
+    float p = OverAche * over;
+    ar += p; lr += p; Side[j] = side;
+    float move = Math.Min(1f, MathF.Abs(b.AngVel[j]) / OverVel);
+    xr += OverAcute * over * move;
+}
+```
+- Комментарий-шапку класса обновить: Discomfort — край хода, тёплая катушка; Ache — давление и удар в упор, скрутка, горячая катушка, фантомы, сломанный сустав за пределом в покое; Acute — поломка упора, разрыв трубки, обрыв кабеля, КЗ, критический перегрев, движение сломанного сустава за пределом.
+- Больше ничего в Nociception не трогать.
+
+## 4. A/B предела бедра — только для теста (Dream)
+- Новый аргумент `--hip-upper X` (float, 0.3..1.2). Разрешён только вместе с `--motor-rom-step-test`, иначе `PushError` и выход с кодом 1.
+- После `_def = RagdollDef.Girl();`: если задан, у суставов `hip_n` и `hip_f` поставить `Upper = X` (если `JointDef` неизменяемый — создать копию с новым Upper; разберись по коду и опиши). Убедись, что `Ragdoll` берёт пределы упоров из этого `_def`.
+- В строку `ROMSTEP` добавить `hipUpper=X.XX`.
+
+## 5. Служебное
+- **Резервная копия чипа:** в `Dream._Ready`, если не `_probeMode`, не `_protocolTest`, не `_fresh` и файл `_chipPath` существует — скопировать его в `<папка чипа>/backup/<имя>_g<Generation:D4>_<yyyy-MM-dd_HHmmss>.chip` (создать папку). Строку о копии вывести в лог.
+- **Лог сна в репозиторий:** `DreamLog` пишет как сейчас в `user://logs/...`, и дополнительно дублирует каждую строку в `res://Diagnostics/DreamLogs/<то же имя>`, если `!OS.HasFeature("template")` (запуск из проекта). Ошибку записи зеркала игнорировать молча.
+- Создать `CHANGELOG.md` (если нет): строка на каждый Fix, начиная с Fix016 и Fix017, кратко.
+- В `ARCHITECTURE.md` в раздел «Сборка и проверка» добавить команды из п.6.
+
+## 6. Проверка (запусти сам, вывод вставь в отчёт дословно)
+`dotnet build "New Game Project.sln"` — 0 ошибок.
+
+Godot: `Godot_v4.7.2-stable_mono_win64_console.exe --headless --fixed-fps 30 --path <проект> res://Dream.tscn -- <аргументы>`
+1. `--sector RECOVER --motor-rom-step-test --levels 0.5,0.6,0.7`
+2. `--sector RECOVER --motor-rom-step-test --levels 0.5,0.6,0.7 --hip-upper 0.7`
+3. `--probe 60 --motor rom --wear off --gyro off` (стойка не сломалась от новой боли)
+4. `--probe 60 --motor nn --wear off --gyro on`
+5. `--sector RECOVER --gens 2 --min-level 0.3 --chip user://chips/test.chip --fresh` — в логе должно быть `100% (no fade)`, `CP step 100%`, и замер `t/s`. Тестовый чип удалить.
+
+Из прогонов 1–2 для каждого экзамена вставь строки `exam…` и `ROMSTEP…` целиком (там видно acute и сустав).
+
+## 7. Отчёт и git
+- Отчёт: `Diagnostics/Diagnostics013.txt`: что изменено (по пунктам 1–5), результаты grep из п.2, вывод п.6, отклонения от задания.
+- `git add -A`, `git commit -m "Fix017: no CP fade, swing-leg protection everywhere, pain levels remap, hip A/B arg, chip backup, log mirror"`, `git push`.
+```

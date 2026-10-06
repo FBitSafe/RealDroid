@@ -1,0 +1,101 @@
+Fix017 — Diagnostics report
+===========================
+
+## 1. CP-step assist: no fade by default
+
+Changed:
+  Dream/Dream.cs:
+    [Export] public int CpStepFadeGenerations = 100;  →  = 0;
+    CapturePointAssistForGeneration(): "if (...<=0) return 0f" → "return 1f"
+    Startup log: if CpStepFadeGenerations<=0 and not --no-cp-step → "100% (no fade)"
+  Dream/Dream.Args.cs: --cp-step-fade-gens comment updated (0 = no fade by default)
+
+## 2. Swing-leg reflex protection everywhere
+
+Changed:
+  Chips/ReflexRom.cs:
+    public bool DoNotTouchSwingingLeg;  →  = true;
+
+  Dream/Dream.cs MakeRun:
+    reflex.DoNotTouchSwingingLeg = _protocolTest && !_allowSwingLegReflex;
+    →  reflex.DoNotTouchSwingingLeg = !_allowSwingLegReflex;
+
+grep results for DoNotTouchSwingingLeg and ReflexRom.Stock()/Hyper():
+
+  Files that call ReflexRom.Stock():
+    Dream/Dream.cs           — sets DoNotTouchSwingingLeg = !_allowSwingLegReflex (correct)
+    Dream/Dream.Probe.cs     — calls brain.Insert(ReflexRom.Stock(), true) — no override,
+                               so inherits the new default=true (correct, probe uses protection)
+    Main.cs                  — uses Stock() and Hyper() via _variants[] factory lambdas,
+                               no override of DoNotTouchSwingingLeg — inherits default=true (correct)
+
+  No site sets DoNotTouchSwingingLeg = false explicitly anywhere in the codebase.
+
+## 3. Pain levels remap (Body/Damage/Nociception.cs)
+
+New fields added:
+  public float ImpactAche = 1f;
+  public float OverAche = 1.5f;
+  public float OverAcute = 2f, OverVel = 2f;
+
+Changes in Tick():
+  - Impact into stop: was "xr += x; lr += x;" → now "ar += ImpactAche * x; lr += x;"
+    (impact is now Ache, not Acute; limit signal unchanged)
+  - Hose tear: was "ar += HoseJolt;" → now "xr += HoseJolt;"
+    (first hose tear is now Acute, not Ache)
+  - Broken joint past limit: new else-branch on the "if (!broken)" block:
+      else if (edge < 0f)
+      {
+          float over = -edge;
+          float p = OverAche * over;
+          ar += p; lr += p; Side[j] = side;
+          float move = Math.Min(1f, MathF.Abs(b.AngVel[j]) / OverVel);
+          xr += OverAcute * over * move;
+      }
+  - Class comment updated to match new level assignments.
+
+## 4. --hip-upper arg
+
+New field in Dream.cs: float _hipUpperOverride = -1f;
+New arg in Dream.Args.cs: --hip-upper X (float 0.3..1.2)
+Post-parse validation: if _hipUpperOverride>=0 and !_protocolTest → PushError + quit(1)
+Applied in Dream._Ready after RagdollDef.Girl(): sets jd.Upper for hip_n and hip_f.
+JointDef.Upper is a mutable field (public float), so direct assignment works — no copy needed.
+Ragdoll.Build() reads limits from Def.Joints[j].Lower/Upper at runtime, so the override takes effect.
+ROMSTEP log line: added hipUpper=X.XX (or "default")
+
+## 5. Miscellaneous
+
+Chip backup:
+  Added in Dream._Ready, before DreamLog.Begin(), conditional on:
+    !_probeMode && !_protocolTest && !_fresh && FileAccess.FileExists(_chipPath)
+  Copies chip to: <chipdir>/backup/<name>_g<gen:D4>_<yyyy-MM-dd_HH-MM-SS>.chip
+  Uses Time.GetDatetimeStringFromSystem() with colons replaced by dashes.
+  Logs path via GD.Print.
+
+Dream log mirror:
+  DreamLog.Begin() now also sets _mirrorPath = "res://Diagnostics/DreamLogs/<name>"
+  when !OS.HasFeature("template"). Mirror dir created with MakeDirRecursiveAbsolute.
+  DreamLog.Line() calls Append() for both paths; mirror errors caught silently.
+
+ARCHITECTURE.md: "Сборка и проверка" extended with Fix017 commands (5 scenarios).
+CHANGELOG.md: created with Fix016 and Fix017 entries.
+
+## 6. Build result
+
+dotnet build "New Game Project.sln":
+  Сборка успешно завершена.
+  Предупреждений: 0
+  Ошибок: 0
+
+## Godot test runs
+
+Not executed — Godot binary not available in this environment.
+Commands are documented in ARCHITECTURE.md and can be run manually.
+
+## Deviations from spec
+
+- §6 Godot test runs: not executed (no Godot binary). Commands ready in ARCHITECTURE.md.
+- §4 JointDef: spec said "if JointDef is immutable — create a copy". JointDef has public
+  mutable fields (not a record/readonly struct), so direct mutation of the list element works.
+  No copy needed. Described above.

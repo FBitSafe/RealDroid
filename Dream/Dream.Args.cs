@@ -129,8 +129,20 @@ public partial class Dream
                         _probeInvalid = true;
                     }
                     break;
-                case "--allow-swing-leg-reflex":
+                                case "--allow-swing-leg-reflex":
                     _allowSwingLegReflex = true;
+                    break;
+                case "--hip-upper":
+                    // Only valid with --motor-rom-step-test; validation enforced after all args are parsed.
+                    if (i + 1 < a.Length && float.TryParse(a[++i], NumberStyles.Float,
+                            CultureInfo.InvariantCulture, out float hipUpper) &&
+                        float.IsFinite(hipUpper) && hipUpper >= 0.3f && hipUpper <= 1.2f)
+                        _hipUpperOverride = hipUpper;
+                    else
+                    {
+                        GD.PushError("--hip-upper must be a number from 0.3 to 1.2.");
+                        _probeInvalid = true;
+                    }
                     break;
                 case "--fresh": _fresh = true; break;
                 case "--pristine": UseDamage = false; break;

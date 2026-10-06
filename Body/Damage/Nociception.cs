@@ -1,9 +1,9 @@
 using System;
 
 /// Ноцицепторы суставов (железо, общий кабель с энкодерами).
-/// Discomfort — безвредные стимулы (край хода, тёплая катушка). Привыкает. Рефлекса нет.
-/// Ache       — обычная боль: за упором, защемление, горячая катушка, фантомы. Отдёргивание.
-/// Acute      — острая: удар в упор, КЗ, перегрев выше критического, разрыв. Реакция всего тела.
+/// Discomfort — край хода, тёплая катушка. Привыкает. Рефлекса нет.
+/// Ache       — давление и удар в упор, скрутка, горячая катушка, фантомы, сломанный сустав за пределом в покое. Отдёргивание.
+/// Acute      — поломка упора, разрыв трубки, обрыв кабеля, КЗ, критический перегрев, движение сломанного сустава за пределом. Реакция всего тела.
 /// Каждый уровень 0..1 на сустав. Total: [0] дискомфорт, [1] боль, [2] острая — по телу.
 public sealed class Nociception
 {
@@ -18,9 +18,12 @@ public sealed class Nociception
     public float HeatStart = 85f;
     public float PhantomRate = 3f;
     public float Sensitization = 1f, SensitizeTau = 8f;
-    // острая
+        // острая
     public float ImpactSpeed = 4f, ImpactSpan = 8f; // рад/с в упор
     public float ShortJolt = 1f, BreakJolt = 1.5f, HoseJolt = 0.6f;
+    public float ImpactAche = 1f;            // удар в упор: обычная боль
+    public float OverAche = 1.5f;            // сломанный сустав за пределом: ноет (на рад)
+    public float OverAcute = 2f, OverVel = 2f; // ...и острая при движении (рад/с для полной силы)
     // затухание
     public float DiscomfortDecay = 0.5f, AcheDecay = 0.4f, AcuteDecay = 0.15f;
 
@@ -67,7 +70,7 @@ public sealed class Nociception
             bool hose = d.Effects && d.HoseTorn[j];
             if (broken && !_wasBroken[j]) xr += BreakJolt;
             if (cut && !_wasCut[j]) xr += BreakJolt;      // последний сигнал перед онемением
-            if (hose && !_wasHose[j]) ar += HoseJolt;
+            if (hose && !_wasHose[j]) xr += HoseJolt;
             _wasBroken[j] = broken; _wasCut[j] = cut; _wasHose[j] = hose;
 
             if (!cut)
@@ -78,7 +81,7 @@ public sealed class Nociception
                 float edge = MathF.Min(lo, hi);
                 float side = lo < hi ? -1f : 1f;
 
-                if (!broken)
+                                if (!broken)
                 {
                     if (edge < ComfortZone)
                     {
@@ -91,7 +94,7 @@ public sealed class Nociception
                         if (into > ImpactSpeed)
                         {
                             float x = (into - ImpactSpeed) / ImpactSpan;
-                            xr += x; lr += x; Side[j] = side;
+                            ar += ImpactAche * x; lr += x; Side[j] = side;
                         }
                         float over = -edge - StopFree;
                         if (over > 0f)
@@ -100,6 +103,14 @@ public sealed class Nociception
                             ar += p; lr += p; Side[j] = side;
                         }
                     }
+                }
+                else if (edge < 0f)
+                {
+                    float over = -edge;
+                    float p = OverAche * over;
+                    ar += p; lr += p; Side[j] = side;
+                    float move = Math.Min(1f, MathF.Abs(b.AngVel[j]) / OverVel);
+                    xr += OverAcute * over * move;
                 }
 
                 if (d.Effects)

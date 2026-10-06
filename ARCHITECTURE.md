@@ -44,10 +44,25 @@ Dream ──► ChipFile.Save (лучший чип) ──► DreamJob.Waking �
 
 ```
 dotnet build "New Game Project.sln"
+
+# Базовый тест сна (2 поколения)
 godot --headless --fixed-fps 30 --path . res://Dream.tscn -- --gens 2 --fresh --pristine --sector STAND --chip user://chips/test.chip
+
+# Тест ROM шага по уровням
+godot --headless --fixed-fps 30 --path . res://Dream.tscn -- --sector RECOVER --motor-rom-step-test --levels 0.5,0.6,0.7
+
+# Тест ROM шага с нестандартным пределом бедра
+godot --headless --fixed-fps 30 --path . res://Dream.tscn -- --sector RECOVER --motor-rom-step-test --levels 0.5,0.6,0.7 --hip-upper 0.7
+
+# Проба выносливости (ROM, 60 с)
+godot --headless --fixed-fps 30 --path . res://Dream.tscn -- --probe 60 --motor rom --wear off --gyro off
+
+# Проба выносливости (NN)
+godot --headless --fixed-fps 30 --path . res://Dream.tscn -- --probe 60 --motor nn --wear off --gyro on
 ```
 
 Тестовый чип после проверки удалять. Игровые чипы: `%APPDATA%\Godot\app_userdata\RealAndroid\chips\`.
+Логи сна: `%APPDATA%\Godot\app_userdata\RealAndroid\logs\` и зеркало `res://Diagnostics/DreamLogs/` (только при запуске из проекта).
 
 ## Известные кандидаты на дальнейший рефакторинг (поведение не менялось)
 

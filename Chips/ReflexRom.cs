@@ -7,7 +7,7 @@ public sealed class ReflexRom : IChip
 {
     public LobeKind Kind => LobeKind.Reflex;
     public string Label { get; private set; }
-    public bool DoNotTouchSwingingLeg;
+    public bool DoNotTouchSwingingLeg = true;
     public float AnkleGain = 4f, AnkleDamp = 0.6f, AnkleMax = 0.8f, HipGain = 0.8f, SpineGain = 0.4f;
     public float Scale = 1f;
 
