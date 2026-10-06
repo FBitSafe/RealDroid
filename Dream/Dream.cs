@@ -117,8 +117,9 @@ public partial class Dream : Node2D
         _def = RagdollDef.Girl();
         _spec = NeuralMotorChip.SpecFor(_def, Hidden1, Hidden2);
 
-        if (_probeMode)
+                if (_probeMode)
         {
+            DreamLog.Begin("probe");
             StartProbe();
             return;
         }
@@ -184,7 +185,8 @@ public partial class Dream : Node2D
         else
             GD.Print($"MOTOR ROM capture-point stepping: {(_disableCapturePointStepping ? "OFF" : $"{CapturePointAssistForGeneration():P0} now, fade over {CpStepFadeGenerations} Recover generations")}; " +
                      $"сохраняю в {ProjectSettings.GlobalizePath(_chipPath)}");
-        StartGeneration();
+            DreamLog.Begin(Protocol.Names[_sector]);
+            StartGeneration();
     }
 
     void StartGeneration()
