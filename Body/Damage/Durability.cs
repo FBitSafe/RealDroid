@@ -2,8 +2,6 @@ using Godot;
 using System;
 using System.Collections.Generic;
 
-public enum DamageMode { Off, Frozen, Live }
-
 /// Износ упоров, проводки и трубок хладагента.
 /// Off — идеальное тело, Frozen — повреждения действуют, но не растут, Live — всё.
 public sealed class Durability

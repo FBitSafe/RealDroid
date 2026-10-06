@@ -1,6 +1,6 @@
 [gd_scene format=3 uid="uid://cq6gddjmjh736"]
 
-[ext_resource type="Script" uid="uid://bodem1bru6ysp" path="res://Dream.cs" id="1"]
+[ext_resource type="Script" uid="uid://bodem1bru6ysp" path="res://Dream/Dream.cs" id="1"]
 
 [node name="Dream" type="Node2D" unique_id=1321326922]
 script = ExtResource("1")
