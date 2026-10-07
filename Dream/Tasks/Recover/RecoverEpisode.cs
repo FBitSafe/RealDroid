@@ -110,20 +110,20 @@ sealed class RecoverEpisode : IEpisode, IExamVerdict
     {
         var g = G;
         if (tick == _pushTick)
-        {
-            _gA = g.Grounded[_footA];
-            _gB = g.Grounded[_footB];
-            g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));
-            _pushed = true;
-            _lastPushTick = tick;
-            if (_force) ForceRecover();
-        }
-        if (tick == _pushTick2)
-        {
-            g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp2, 0f));
-            _lastPushTick = tick;
-            if (_force) ForceRecover();
-        }
+                {
+                    _gA = g.Grounded[_footA];
+                    _gB = g.Grounded[_footB];
+                    PushModel.Impulse(T.LevelOf(_dir), _dir, g);
+                    _pushed = true;
+                    _lastPushTick = tick;
+                    if (_force) ForceRecover();
+                }
+                if (tick == _pushTick2)
+                {
+                    PushModel.Impulse(MathF.Abs(_imp2) / T.PushMax, _imp2 >= 0f ? 0 : 1, g);
+                    _lastPushTick = tick;
+                    if (_force) ForceRecover();
+                }
         if (tick == _prePushTick)
             g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_prePush, 0f));
 

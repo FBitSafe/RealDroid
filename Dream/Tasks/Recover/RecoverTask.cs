@@ -6,7 +6,7 @@ using System;
 public sealed class RecoverTask : IDreamTask, ICurriculum
 {
     public float EpisodeSeconds = 7.5f, SecondPushDelay = 3f;
-    public float PushMax = 3000f;                       // импульс в грудь при уровне 100%
+    public float PushMax = PushModel.FullImpulse;       // импульс в грудь при уровне 100%
     public float LevelFwd = 0f, LevelBack = 0f, LevelStep = 0.05f;   // Fwd: в спину (+x), Back: в грудь (−x)
     public float MinExamLevel;
     public float ImpactCost = 2f, ImpactFree = 60f;     // удар стопы, px/s

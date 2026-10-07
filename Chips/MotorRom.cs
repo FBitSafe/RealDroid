@@ -15,7 +15,7 @@ public sealed class MotorRom : IChip
 
     public LobeKind Kind => LobeKind.Motor;
     public string Label => "MOTOR ROM";
-    public bool CapturePointStepping = true;
+    public bool CapturePointStepping = false;
     public float CapturePointAssist = 1f;
     public int CapturePointSteps { get; private set; }
     public int CapturePointTimeouts { get; private set; }

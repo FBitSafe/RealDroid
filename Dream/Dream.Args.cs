@@ -97,11 +97,14 @@ public partial class Dream
                     else GD.PushError("--min-level must be a number from 0 to 1.");
                     break;
                 case "--motor-rom-step-test":
-                    _protocolTest = true;
-                    break;
-                case "--no-cp-step":
-                    _disableCapturePointStepping = true;
-                    break;
+                                    _protocolTest = true;
+                                    break;
+                                case "--cp-step":
+                                    _cpStepEnabled = true;
+                                    break;
+                                case "--no-cp-step":
+                                    _cpStepEnabled = false;
+                                    break;
                 case "--levels":
                     if (i + 1 >= a.Length)
                     {

@@ -16,6 +16,7 @@ public partial class Main : Node2D
 	BrainPanel _panel;
 	LobeKind _sel = LobeKind.Motor;
 	DamageMode _damageMode = DamageMode.Live;
+	float PushLevel = 0.45f;
 
 	readonly Dictionary<LobeKind, Func<IChip>[]> _variants = new();
 	readonly Dictionary<LobeKind, int> _variantIdx = new();
@@ -41,7 +42,8 @@ public partial class Main : Node2D
 		AddChild(_dragLine);
 
 		var ui = new CanvasLayer();
-		_panel = new BrainPanel { Selected = _sel };
+
+		_panel = new BrainPanel { Selected = _sel, PushLevel = PushLevel };
 		ui.AddChild(_panel);
 		AddChild(ui);
 
@@ -239,8 +241,16 @@ public partial class Main : Node2D
 					_girl.Dur.Repair();
 					Say("Полный ремонт: катушки, упоры, проводка, хладагент");
 					break;
-				case Key.Q: Push(-1); break;
-				case Key.E: Push(+1); break;
+				case Key.Bracketleft:
+					PushLevel = Mathf.Clamp(PushLevel - 0.05f, 0.05f, 1f);
+					_panel.PushLevel = PushLevel;
+					break;
+				case Key.Bracketright:
+					PushLevel = Mathf.Clamp(PushLevel + 0.05f, 0.05f, 1f);
+					_panel.PushLevel = PushLevel;
+					break;
+				case Key.Q: Push(1); break;   // 1 = в грудь (−x)
+				case Key.E: Push(0); break;   // 0 = в спину (+x)
 			}
 		}
 		else if (e is InputEventMouseButton mb && mb.ButtonIndex == MouseButton.Left)
@@ -253,7 +263,8 @@ public partial class Main : Node2D
 	void Push(int dir)
 	{
 		if (_girl?.Bodies == null) return;
-		_girl.Bodies[_girl.Chest].ApplyCentralImpulse(new Vector2(dir * 2500f, 0));
+
+		PushModel.Impulse(PushLevel, dir, _girl);
 	}
 
 	void TryGrab(Vector2 p)

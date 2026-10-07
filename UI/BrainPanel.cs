@@ -4,9 +4,10 @@ using System;
 public partial class BrainPanel : Control
 {
     public Ragdoll Girl;
-    public LobeKind Selected = LobeKind.Motor;
-    public string Message = "";
-    public float MessageTime;
+        public LobeKind Selected = LobeKind.Motor;
+        public string Message = "";
+        public float MessageTime;
+        public float PushLevel = 0.45f;
 
     public static readonly LobeKind[] Order =
         { LobeKind.Firmware, LobeKind.Vestibular, LobeKind.Reflex, LobeKind.Arbiter, LobeKind.Motor };
@@ -35,12 +36,39 @@ public partial class BrainPanel : Control
 
     static Color Health(float h) => h > 0.6f ? Dim : h > 0f ? Warm : Burn;
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     static string ModeName(DamageMode m) => m switch
-    {
-        DamageMode.Off => "ВЫКЛ (идеальное тело)",
-        DamageMode.Frozen => "ЗАМОРОЖЕН",
-        _ => "ВКЛ",
-    };
+        {
+            DamageMode.Off => "ВЫКЛ (идеальное тело)",
+            DamageMode.Frozen => "ЗАМОРОЖЕН",
+            _ => "ВКЛ",
+        };
+
+        bool SteppingOn()
+        {
+            if (Girl == null || !IsInstanceValid(Girl) || Girl.Brain == null) return false;
+            return Girl.Brain.Slots[(int)LobeKind.Motor].Chip switch
+            {
+                MotorRom rom => rom.CapturePointStepping,
+                NeuralMotorChip nn => nn.BaseStepping,
+                _ => false,
+            };
+        }
 
     public override void _Draw()
     {
@@ -137,10 +165,13 @@ public partial class BrainPanel : Control
         }
 
         y += 22;
-        if (MessageTime > 0) Text(10, y, "» " + Message, Booting);
-        y += 20; Text(10, y, "[1-5] слот  [Space] вынуть/вставить  [Tab] другой чип", Dim, 11);
-        y += 16; Text(10, y, "[ЛКМ] тащить  [Q/E] толкнуть  [G] гироскоп  [D] схема", Dim, 11);
-        y += 16; Text(10, y, "[K] режим износа  [J] состарить упоры  [H] полный ремонт  [R] заново", Dim, 11);
-        y += 16; Text(10, y, "[T] сон STAND   [Y] сон RECOVER (нужен STAND ≥ 50%)   во сне [Esc]", Dim, 11);
-    }
-}
+                if (MessageTime > 0) Text(10, y, "» " + Message, Booting);
+                y += 20;
+                int pushPct = Mathf.RoundToInt(Math.Clamp(PushLevel, 0.05f, 1f) * 100f);
+                Text(10, y, $"толчок {pushPct}% [ ]  Q=грудь E=спина  шаг: {(SteppingOn() ? "вкл" : "выкл")}", Dim, 11);
+                y += 16; Text(10, y, "[1-5] слот  [Space] вынуть/вставить  [Tab] другой чип", Dim, 11);
+                y += 16; Text(10, y, "[ЛКМ] тащить  [Q/E] толкнуть  [G] гироскоп  [D] схема", Dim, 11);
+                y += 16; Text(10, y, "[K] режим износа  [J] состарить упоры  [H] полный ремонт  [R] заново", Dim, 11);
+                y += 16; Text(10, y, "[T] сон STAND   [Y] сон RECOVER (нужен STAND ≥ 50%)   во сне [Esc]", Dim, 11);
+            }
+        }

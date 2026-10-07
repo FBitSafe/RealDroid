@@ -22,7 +22,7 @@ public sealed class NeuralMotorChip : IChip
     public string Name = "MOTOR NN";
     public int Generation;
     public bool Burnt;
-    public bool BaseStepping = true;
+    public bool BaseStepping = false;
     public float BaseStepAssist = 1f;
     public float ResTargetUpper = 0.5f, ResTargetLeg = 0.2f, ResTargetSwing = 0.1f, ResTau = 0.06f;
     public float ResStiff = 0.4f;

@@ -31,6 +31,8 @@ Dream: EsOptimizer ─► NeuralMotorChip(W) ─► N клонов Ragdoll ─�
 Dream ──► ChipFile.Save (лучший чип) ──► DreamJob.Waking ──► Main.tscn
 ```
 
+**RECOVER v1 = голеностоп+бёдра без шага; CP-шаг выключен, вернётся в WALK; `--cp-step` для экспериментов.**
+
 ## Правила, чтобы структура не расползалась
 
 - Один тип на файл, имя файла = имя типа. Исключение: вложенные типы (`Dream.Run`).
@@ -52,11 +54,14 @@ dotnet build "New Game Project.sln"
 # Базовый тест сна (2 поколения)
 ./tools/godot.ps1 --headless --fixed-fps 30 --path . res://Dream.tscn '--' --gens 2 --fresh --pristine --sector STAND --chip user://chips/test.chip
 
-# Тест ROM шага по уровням
+# Тест ROM без CP-шага (голеностоп + бёдра)
 ./tools/godot.ps1 --headless --fixed-fps 30 --path . res://Dream.tscn '--' --sector RECOVER --motor-rom-step-test --levels '0.5,0.6,0.7'
 
+# Тест ROM с CP-шагом (экспериментально, --cp-step)
+./tools/godot.ps1 --headless --fixed-fps 30 --path . res://Dream.tscn '--' --sector RECOVER --motor-rom-step-test --cp-step --levels '0.5,0.6,0.7'
+
 # Тест ROM шага с нестандартным пределом бедра
-./tools/godot.ps1 --headless --fixed-fps 30 --path . res://Dream.tscn '--' --sector RECOVER --motor-rom-step-test --levels '0.5,0.6,0.7' --hip-upper 0.7
+./tools/godot.ps1 --headless --fixed-fps 30 --path . res://Dream.tscn '--' --sector RECOVER --motor-rom-step-test --cp-step --levels '0.5,0.6,0.7' --hip-upper 0.7
 
 # Проба выносливости (ROM, 60 с)
 ./tools/godot.ps1 --headless --fixed-fps 30 --path . res://Dream.tscn '--' --probe 60 --motor rom --wear off --gyro off

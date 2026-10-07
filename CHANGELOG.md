@@ -1,5 +1,12 @@
 # Changelog
 
+## Fix020
+- RECOVER v1 = голеностоп+бёдра без шага: CP-шаг выключен по умолчанию, вернётся в WALK; `--cp-step` для экспериментов.
+- `MotorRom.CapturePointStepping` и `NeuralMotorChip.BaseStepping` по умолчанию `false`; код шага не удалён.
+- Dream: новый аргумент `--cp-step` (включает шаг, в `gen`/стартовом логе `CP step 100 %` / `100% (no fade)`); при выключенном шаге стартовый лог `OFF (RECOVER v1)`, в `gen` пишется `CP step off`. `--no-cp-step` оставлен для совместимости.
+- Откат чипа: ночной результат сохранён как `motor_nn_cpstep_night.chip`; рабочий `motor_nn.chip` восстановлен из резерва перед ночным сном (`motor_nn_g0136_2026-10-07T00-01-31.chip`, gen 136).
+- Толчок в игре в процентах: общий `PushModel.Impulse(level, dir, body)`; `Main.PushLevel = 0.45`, `[`/`]` — ±0.05 в 0.05..1.0; `Q` = в грудь, `E` = в спину; HUD-строка на BrainPanel.
+
 ## Fix019
 - Gen timing: wall-clock seconds per generation appended to each `gen` log line as `| Xs/gen ETA hh:mm` (ETA = rolling avg of last 5 gens × remaining gens, only when `MaxGenerations > 0`).
 - `dream END` line added on completion: `dream END gens=N total=hh:mm:ss best exam=X.XXX (gen K)`.

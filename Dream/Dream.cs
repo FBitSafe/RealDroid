@@ -15,7 +15,7 @@ public partial class Dream : Node2D
     [Export] public float ReplayFloor = 0.6f;
     [Export] public float GyroOffShare = 0.3f;
     [Export] public int MaxGenerations = 0;
-    [Export] public int CpStepFadeGenerations = 0;   // 0 = no fade (full assist always); >0 = fade over N Recover generations; use --no-cp-step to disable entirely
+    [Export] public int CpStepFadeGenerations = 0;   // 0 = no fade (full assist when cp-step enabled); >0 = fade over N Recover generations; stepping is OFF by default, enable with --cp-step
     [Export] public bool UseDamage = true;
 
     const uint CloneLayer = 1u << 5;
@@ -48,7 +48,9 @@ public partial class Dream : Node2D
     float _replayStart = float.NaN;
     bool _headless, _fresh, _failed;
     bool _protocolTest, _allowSwingLegReflex;
-    bool _disableCapturePointStepping;
+
+
+    bool _cpStepEnabled;
     float[] _protocolLevels;
     int _protocolLevelIndex = -1;
     bool _probeMode, _probeInvalid, _probeFinished;
@@ -203,9 +205,9 @@ public partial class Dream : Node2D
                      "neural weights will not be used or saved.");
         else
         {
-            string cpStepDesc = _disableCapturePointStepping ? "OFF"
-                : CpStepFadeGenerations <= 0 ? "100% (no fade)"
-                : $"{CapturePointAssistForGeneration():P0} now, fade over {CpStepFadeGenerations} Recover generations";
+            string cpStepDesc = !_cpStepEnabled ? "OFF (RECOVER v1)"
+                            : CpStepFadeGenerations <= 0 ? "100% (no fade)"
+                            : $"{CapturePointAssistForGeneration():P0} now, fade over {CpStepFadeGenerations} Recover generations";
             GD.Print($"MOTOR ROM capture-point stepping: {cpStepDesc}; сохраняю в {ProjectSettings.GlobalizePath(_chipPath)}");
         }
 
@@ -311,19 +313,31 @@ public partial class Dream : Node2D
         reflex.DoNotTouchSwingingLeg = !_allowSwingLegReflex;
         br.Insert(reflex, true);
         br.Insert(task.MakeArbiter(), true);
+
+
+
+
+
+
+
+
+
+
+
+
         IChip motorChip;
-        if (_protocolTest)
-            motorChip = new MotorRom();
-        else
-        {
-            var neuralMotor = new NeuralMotorChip(_spec, w)
-            {
-                BaseStepping = !_disableCapturePointStepping,
-                BaseStepAssist = _disableCapturePointStepping ? 0f : CapturePointAssistForGeneration(),
-            };
-            motorChip = neuralMotor;
-        }
-        br.Insert(motorChip, true);
+                if (_protocolTest)
+                    motorChip = new MotorRom { CapturePointStepping = _cpStepEnabled };
+                else
+                {
+                    var neuralMotor = new NeuralMotorChip(_spec, w)
+                    {
+                        BaseStepping = _cpStepEnabled,
+                        BaseStepAssist = _cpStepEnabled ? CapturePointAssistForGeneration() : 0f,
+                    };
+                    motorChip = neuralMotor;
+                }
+                br.Insert(motorChip, true);
 
         g.Modulate = role == 0 ? Ghost : role == 2 ? ReplayColor : examIdx == 0 ? ExamMain : ExamOther;
         g.ZIndex = role == 0 ? 0 : role == 1 && examIdx == 0 ? 10 : 5;
@@ -491,7 +505,7 @@ public partial class Dream : Node2D
         float bonus = cur?.Bonus(_examOk, _examTotal) ?? 0f;
         string level = cur?.Status ?? "";
         cur?.Update(_examOk, _examTotal);
-        float stepAssist = _disableCapturePointStepping ? 0f : CapturePointAssistForGeneration();
+        float stepAssist = _cpStepEnabled ? CapturePointAssistForGeneration() : 0f;
 
         _es.Tell(fit);
         _gen++;
@@ -530,9 +544,13 @@ public partial class Dream : Node2D
         // track best exam
         if (_exam > _bestExam) { _bestExam = _exam; _bestExamGen = _gen; }
 
-        DreamLog.Line($"gen {_gen,4}  {Protocol.Names[_sector]}  exam {_exam:F3} ({_examOk}/{_examTotal}) pose {_examQ:P0}" +
-                      (nr > 0 ? $"  replay {_replayScore:F3}" : "") +
-                      $"  {level}  CP step {stepAssist:P0}  mean {_mean:F3}  best {_best:F3}  {_rate:F0} t/s{saved}{etaStr}");
+
+
+
+        string cpStepStr = _cpStepEnabled ? $"CP step {stepAssist:P0}" : "CP step off";
+                DreamLog.Line($"gen {_gen,4}  {Protocol.Names[_sector]}  exam {_exam:F3} ({_examOk}/{_examTotal}) pose {_examQ:P0}" +
+                              (nr > 0 ? $"  replay {_replayScore:F3}" : "") +
+                              $"  {level}  {cpStepStr}  mean {_mean:F3}  best {_best:F3}  {_rate:F0} t/s{saved}{etaStr}");
 
         if (_headless && MaxGenerations > 0 && _gen - _startGen >= MaxGenerations)
         {

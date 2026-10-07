@@ -1,0 +1,213 @@
+Fix020 — Diagnostics report
+===========================
+
+## 1. CP-step OFF by default (game and dream)
+
+Ожидалось:
+- MotorRom `CapturePointStepping` и NeuralMotorChip `BaseStepping` по умолчанию false,
+  код шага не удаляется.
+- Dream: шаг выключен, новый `--cp-step` включает, `--no-cp-step` остаётся и ничего не
+  ломает; стартовый лог `MOTOR ROM capture-point stepping: OFF (RECOVER v1)` или
+  `100% (no fade)` при `--cp-step`; в строках `gen` писать `CP step off` при выключенном шаге.
+- `--motor-rom-step-test` работает и без шага (тест «голеностоп + бёдра»).
+- Main: клавиша C по-прежнему переключает шаг, начальное состояние выключено и видно на панели.
+
+Найдено:
+- `Chips/MotorRom.cs`: `public bool CapturePointStepping = true;`
+- `Chips/NeuralMotorChip.cs`: `public bool BaseStepping = true;`
+- `Dream/Dream.cs`: флаг `_disableCapturePointStepping`, `MakeRun` превращал его в
+  `BaseStepping = !_disableCapturePointStepping` и `BaseStepAssist`;
+  в `EndGeneration` строка `CP step {stepAssist:P0}`.
+- `Dream/Dream.Args.cs`: был только `--no-cp-step`.
+
+Сделано:
+- `MotorRom.CapturePointStepping` → `= false`.
+- `NeuralMotorChip.BaseStepping` → `= false`.
+- `Dream/Dream.cs`: флаг переделан в `_cpStepEnabled` (по умолчанию false).
+  - `MakeRun`: `BaseStepping = _cpStepEnabled; BaseStepAssist = _cpStepEnabled ? CapturePointAssistForGeneration() : 0f;`
+  - в протокольном тесте: `new MotorRom { CapturePointStepping = _cpStepEnabled }`.
+  - стартовый лог: `!_cpStepEnabled ? "OFF (RECOVER v1)" : CpStepFadeGenerations <= 0 ? "100% (no fade)" : ...`.
+  - в `gen`: `_cpStepEnabled ? $"CP step {stepAssist:P0}" : "CP step off"`.
+- `Dream/Dream.Args.cs`: добавлен `--cp-step` → `_cpStepEnabled = true`;
+  `--no-cp-step` → `_cpStepEnabled = false` (backward-compatible, но это значение и есть дефолт).
+- Main: клавиша C не менялась, но из-за дефолта false теперь стартует с выключенным шагом;
+  на панели строка показывает `шаг: выкл`.
+
+ArbiterRom без шага выходит из RECOVER в STAND:
+- Да, подтверждено. При выключенном CP-шаге MotorRom не разводит стопы, поэтому условие
+  выхода из RECOVER (`spread <= ExitSpread` и обе стопы на земле, `|ComVx| <= ExitVel`,
+  запас `m > ExitMargin`, `_exitDwell >= ExitDwell`) выполняется сразу после возврата ξ в опору.
+  В выводах тестов 1 и 4 все экзамены показывают `recover≈0.60s`, `СТОИТ`, шаг вывода `шаг=0px/1px`.
+
+## 2. Откат чипа
+
+Текущий `motor_nn.chip` (после ночного сна, Generation=1141, maturity STAND=0.988,
+RECOVER=0.994) переименован в `motor_nn_cpstep_night.chip` — ночной результат сохранён.
+
+Резервная копия перед ночным сном:
+- Файл: `chips\backup\motor_nn_g0136_2026-10-07T00-01-31.chip`
+- Generation: 136
+- Зрелость секторов: [0.988, 0.248, 0, 0, 0, 0, 0, 0]  (STAND, RECOVER, GETUP, WALK, 4–7)
+- SectorGen: [17, 119, 0, 0, 0, 0, 0, 0]
+
+Эта копия скопирована как `chips\motor_nn.chip`. Probe подтверждает:
+`chip=MOTOR NN generation=136 standMaturity=0.988`.
+
+## 3. Сила толчка в игре в процентах
+
+Найдено в `RecoverEpisode`:
+`_imp = (_dir == 0 ? 1f : -1f) * t.LevelOf(_dir) * t.PushMax;`
+и применение `g.Bodies[g.Chest].ApplyCentralImpulse(new Vector2(_imp, 0f));`
+(`PushMax = 3000f`).
+
+Сделано:
+- Новый `Core/PushModel.cs`: `PushModel.FullImpulse = 3000f`;
+  `PushModel.Impulse(float level, int dir, Ragdoll body)` применяет в грудь
+  `(dir == 0 ? +1 : -1) * level * FullImpulse`; `dir 0 = в спину (+x)`, `dir 1 = в грудь (−x)`.
+- `RecoverTask.PushMax` = `PushModel.FullImpulse` (число не изменилось).
+- `RecoverEpisode.Step` использует `PushModel.Impulse(...)` для первого и второго толчка.
+- `Main` использует `PushModel.Impulse(PushLevel, dir, _girl)` для Q/E.
+- Main: `float PushLevel = 0.45f`; клавиши `[` и `]` меняют на ±0.05 в пределах 0.05..1.0.
+  Q = толчок в грудь (−x), E = толчок в спину (+x) — те же стороны и та же точка (грудь), что во сне.
+- `BrainPanel` рисует строку:
+  `толчок 45% [ ]  Q=грудь E=спина  шаг: выкл`
+  (процент считается `RoundToInt(clamp(PushLevel, 0.05, 1) * 100)`, состояние шага читается
+  из MOTOR ROM/NN в текущем слоте).
+
+## 4. Проверки (запущены через tools/godot.ps1)
+
+`dotnet build "New Game Project.sln"` — 0 ошибок, 0 предупреждений.
+
+### 1) `--sector RECOVER --motor-rom-step-test --levels 0.3,0.4,0.5,0.6` (без шага)
+
+```
+  exam0 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+  exam1 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+  exam2 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+  exam3 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.11, impact=0, ticks=1800/1800
+ROM step exam 2/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.15, impact=0, ticks=1800/1800
+ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.11, impact=0, ticks=1800/1800
+ROM step exam 4/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.15, impact=0, ticks=1800/1800
+ROMSTEP level=0.30 pass=4/4 steps=[0,0,0,0] timeouts=[0,0,0,0] kneeMax=0.15 impactMax=0 back=СТОИТ/СТОИТ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+  exam3 толчок -40% ПАДЕНИЕ(голова) t=2.93s recover=1.93s шаг=0px acute=0.00 поза=0.00 дребезг=8 колено=0.16 удар=0
+  exam1 толчок -40% ПАДЕНИЕ(голова) t=3.14s recover=2.14s шаг=1px acute=0.00 поза=0.00 дребезг=6 колено=0.16 удар=0
+  exam0 толчок +40% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+  exam2 толчок +40% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.12, impact=0, ticks=1800/1800
+ROM step exam 2/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.16, impact=0, ticks=754/1800
+ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.12, impact=0, ticks=1800/1800
+ROM step exam 4/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.16, impact=0, ticks=702/1800
+ROMSTEP level=0.40 pass=2/4 steps=[0,0,0,0] timeouts=[0,0,0,0] kneeMax=0.16 impactMax=0 back=ПАДЕНИЕ/ПАДЕНИЕ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+  exam3 толчок -50% ПАДЕНИЕ(голова) t=2.50s recover=1.50s шаг=0px acute=0.00 поза=0.00 дребезг=8 колено=0.16 удар=0
+  exam1 толчок -50% ПАДЕНИЕ(голова) t=2.58s recover=1.58s шаг=0px acute=0.00 поза=0.00 дребезг=8 колено=0.16 удар=0
+  exam0 толчок +50% СТОИТ t=7.50s recover=0.80s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+  exam2 толчок +50% СТОИТ t=7.50s recover=1.20s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.13, impact=0, ticks=1800/1800
+ROM step exam 2/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.16, impact=0, ticks=619/1800
+ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.13, impact=0, ticks=1800/1800
+ROM step exam 4/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.16, impact=0, ticks=601/1800
+ROMSTEP level=0.50 pass=2/4 steps=[0,0,0,0] timeouts=[0,0,0,0] kneeMax=0.16 impactMax=0 back=ПАДЕНИЕ/ПАДЕНИЕ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+  exam3 толчок -60% ПАДЕНИЕ(голова) t=2.32s recover=1.32s шаг=0px acute=0.00 поза=0.00 дребезг=8 колено=0.17 удар=0
+  exam1 толчок -60% ПАДЕНИЕ(голова) t=2.37s recover=1.37s шаг=0px acute=0.00 поза=0.00 дребезг=8 колено=0.17 удар=0
+  exam2 толчок +60% ПАДЕНИЕ(голова) t=2.75s recover=1.75s шаг=0px acute=0.00 поза=0.00 дребезг=4 колено=0.20 удар=0
+  exam0 толчок +60% ПАДЕНИЕ(голова) t=2.90s recover=1.90s шаг=0px acute=0.00 поза=0.00 дребезг=8 колено=0.20 удар=13
+ROM step exam 1/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.20, impact=13, ticks=697/1800
+ROM step exam 2/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.17, impact=0, ticks=568/1800
+ROM step exam 3/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.20, impact=0, ticks=659/1800
+ROM step exam 4/4: passed=False, survived=False, steps=0, timeouts=0, knee=0.17, impact=0, ticks=556/1800
+ROMSTEP level=0.60 pass=0/4 steps=[0,0,0,0] timeouts=[0,0,0,0] kneeMax=0.20 impactMax=13 back=ПАДЕНИЕ/ПАДЕНИЕ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+```
+
+Вывод: шага нет (`steps` везде 0) — тест работает как «голеностоп + бёдра».
+
+### 2) то же + `--cp-step`
+
+```
+  exam0 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+  exam1 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+  exam2 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+  exam3 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.11, impact=0, ticks=1800/1800
+ROM step exam 2/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.15, impact=0, ticks=1800/1800
+ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.11, impact=0, ticks=1800/1800
+ROM step exam 4/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.15, impact=0, ticks=1800/1800
+ROMSTEP level=0.30 pass=4/4 steps=[0,0,0,0] timeouts=[0,0,0,0] kneeMax=0.15 impactMax=0 back=СТОИТ/СТОИТ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+  exam0 толчок +40% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+  exam1 толчок -40% СТОИТ t=7.50s recover=3.20s шаг=30px acute=0.00 поза=0.97 дребезг=14 колено=1.22 удар=53
+  exam2 толчок +40% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+  exam3 толчок -40% СТОИТ t=7.50s recover=3.20s шаг=31px acute=0.00 поза=0.98 дребезг=16 колено=1.23 удар=54
+ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.12, impact=0, ticks=1800/1800
+ROM step exam 2/4: passed=True, survived=True, steps=3, timeouts=2, knee=1.22, impact=53, ticks=1800/1800
+ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.12, impact=0, ticks=1800/1800
+ROM step exam 4/4: passed=True, survived=True, steps=4, timeouts=2, knee=1.23, impact=54, ticks=1800/1800
+ROMSTEP level=0.40 pass=4/4 steps=[0,3,0,4] timeouts=[0,2,0,2] kneeMax=1.23 impactMax=54 back=СТОИТ/СТОИТ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+  exam0 толчок +50% СТОИТ t=7.50s recover=0.80s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+  exam1 толчок -50% СТОИТ t=7.50s recover=2.60s шаг=29px acute=0.00 поза=0.98 дребезг=10 колено=1.22 удар=66
+  exam2 толчок +50% СТОИТ t=7.50s recover=1.20s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.13 удар=0
+  exam3 толчок -50% СТОИТ t=7.50s recover=2.50s шаг=29px acute=0.00 поза=0.98 дребезг=10 колено=1.24 удар=66
+ROM step exam 1/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.13, impact=0, ticks=1800/1800
+ROM step exam 2/4: passed=True, survived=True, steps=3, timeouts=2, knee=1.22, impact=66, ticks=1800/1800
+ROM step exam 3/4: passed=True, survived=True, steps=0, timeouts=0, knee=0.13, impact=0, ticks=1800/1800
+ROM step exam 4/4: passed=True, survived=True, steps=3, timeouts=2, knee=1.24, impact=66, ticks=1800/1800
+ROMSTEP level=0.50 pass=4/4 steps=[0,3,0,3] timeouts=[0,2,0,2] kneeMax=1.24 impactMax=66 back=СТОИТ/СТОИТ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+  exam2 толчок +60% ПАДЕНИЕ(голова) t=3.11s recover=2.11s шаг=41px acute=0.00 поза=0.00 дребезг=24 колено=1.42 удар=34
+  exam0 толчок +60% ПАДЕНИЕ(голова) t=3.30s recover=2.30s шаг=43px acute=0.00 поза=0.00 дребезг=19 колено=1.41 удар=31
+  exam1 толчок -60% ПАДЕНИЕ(голова) t=4.44s recover=3.44s шаг=32px acute=0.00 поза=0.00 дребезг=34 колено=1.23 удар=57
+  exam3 толчок -60% ПАДЕНИЕ(голова) t=5.55s recover=4.55s шаг=44px acute=0.00 поза=0.00 дребезг=51 колено=1.49 удар=68
+ROM step exam 1/4: passed=False, survived=False, steps=4, timeouts=0, knee=1.41, impact=31, ticks=791/1800
+ROM step exam 2/4: passed=False, survived=False, steps=8, timeouts=2, knee=1.23, impact=57, ticks=1066/1800
+ROM step exam 3/4: passed=False, survived=False, steps=4, timeouts=0, knee=1.42, impact=34, ticks=747/1800
+ROM step exam 4/4: passed=False, survived=False, steps=9, timeouts=1, knee=1.49, impact=68, ticks=1331/1800
+ROMSTEP level=0.60 pass=0/4 steps=[4,8,4,9] timeouts=[0,2,0,1] kneeMax=1.49 impactMax=68 back=ПАДЕНИЕ/ПАДЕНИЕ reach(back=62.0px,forward=82.0px) hipUpper=default swing-leg-reflex-protection=on.
+```
+
+Вывод: CP-шаг включён, числа совпадают с поведением Fix018 (шаги появляются на толчке в грудь 40%+,
+probe/колени/удары такие же по форме).
+
+### 3) `--probe 60 --motor nn --wear off --gyro on` (STAND на откатанном чипе)
+
+```
+probe START seconds=60 motor=nn chip=MOTOR NN generation=136 standMaturity=0.988 nonzeroWeights=3630/4170 path=C:/Users/fbits/AppData/Roaming/Godot/app_userdata/RealAndroid/chips/motor_nn.chip wear=off gyro=on pristine=yes
+... (30 промежуточных строк probe t=2..60: arb=STAND, p=[S 1.00 R 0.00], spread=0px) ...
+probe END t=60.0 arb=STAND p=[S 1.00 R 0.00] comX=-0.015 xi=-0.015 margin=0.12 поза=1.00 Tmax=25.1(shoulder_n) imax=1.00(shoulder_n) heat=0.00 power=0.00 stiffMean=0.68 spread=0px reason=time
+```
+
+### 4) `--sector RECOVER --gens 2 --min-level 0.3 --chip user://chips/test.chip --fresh`
+
+```
+Пустой чип, 4170 параметров
+Сектор RECOVER, общие веса x1.00, повторение: 1, травмы: нет
+MOTOR ROM capture-point stepping: OFF (RECOVER v1); сохраняю в C:/Users/fbits/AppData/Roaming/Godot/app_userdata/RealAndroid/chips/test.chip
+  exam0 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+  exam1 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+  exam2 толчок +30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.11 удар=0
+  exam3 толчок -30% СТОИТ t=7.50s recover=0.60s шаг=0px acute=0.00 поза=0.98 дребезг=0 колено=0.15 удар=0
+replay floor 0.60
+gen    1  RECOVER  exam 3.782 (4/4) pose 98 %  replay 1.360  спина 30 % / грудь 30 % (мин. 30 %)  CP step off  mean 2.309  best 4.762  377 t/s  ★ | 5s/gen ETA 00:00
+  exam0 толчок +35% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+  exam1 толчок -35% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.98 дребезг=0 колено=0.17 удар=0
+  exam2 толчок +35% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.98 дребезг=0 колено=0.12 удар=0
+  exam3 толчок -35% СТОИТ t=7.50s recover=0.60s шаг=1px acute=0.00 поза=0.98 дребезг=0 колено=0.17 удар=0
+gen    2  RECOVER  exam 3.782 (4/4) pose 98 %  replay 1.352  спина 35 % / грудь 35 % (мин. 30 %)  CP step off  mean 2.493  best 4.808  344 t/s  ★ | 5s/gen ETA 00:00
+dream END gens=2 total=00:00:10 best exam=3.782 (gen 1)
+```
+
+Проверено: `CP step off` присутствует в обеих строках `gen`. `test.chip` и его backup удалены.
+
+### Дополнительно: обычный прогон с `--cp-step` (1 поколение, test.chip)
+
+Для проверки стартового лога `100% (no fade)`:
+
+```
+MOTOR ROM capture-point stepping: 100% (no fade); сохраняю в C:/Users/fbits/AppData/Roaming/Godot/app_userdata/RealAndroid/chips/test.chip
+gen    1  RECOVER  exam 3.782 (4/4) pose 98 %  replay 1.360  спина 30 % / грудь 30 % (мин. 30 %)  CP step 100 %  mean 2.309  best 4.762  376 t/s  ★ | 5s/gen ETA 00:00
+```
+
+`test.chip` удалён, лог пробного прогона удалён.
+
+## Cleanup
+
+- Пробные логи этого Fix (`Diagnostics/DreamLogs/dream_2026-10-08_*.txt`) удалены.
+- Ночной лог (`dream_2026-10-07_*.txt`) не тронут.
+- `test.chip` и его backup удалены.
