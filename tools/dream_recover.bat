@@ -15,7 +15,7 @@ echo.
 echo Son RECOVER, pokolenij: %GENS%. Ne zakryvaite okno. Otklyuchite spyashij rezhim.
 echo.
 
-"%GODOT%" --headless --fixed-fps 30 --path . res://Dream.tscn -- --gens %GENS% --sector RECOVER --min-level 0.3 %CHIPARG%
+"%GODOT%" --fixed-fps 30 --path . res://Dream.tscn -- --gens %GENS% --sector RECOVER --min-level 0.3 %CHIPARG%
 
 if defined NOGIT goto :end
 
